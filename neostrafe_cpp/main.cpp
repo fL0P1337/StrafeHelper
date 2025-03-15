@@ -1,11 +1,12 @@
 ﻿#include <windows.h>
 #include <shellapi.h>
-#include <map>
+#include <unordered_set>
+#include <unordered_map>
 #include <vector>
-#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <algorithm>
 
 // Constants for tray icon and menu
 #define ID_TRAY_APP_ICON                1001
@@ -13,15 +14,14 @@
 #define ID_TRAY_WASD_STRAFING           3002
 #define WM_TRAYICON                     (WM_USER + 1)
 
-// Application details
 const char* APP_NAME = "StrafeHelper";
 const char* VERSION = "1.0_optimized";
 
-// Configuration defaults (mutable, so they can be overwritten from config file)
+// Configuration defaults (may be overwritten from config file)
 int SPAM_DELAY_MS = 10;         // Delay between spamming cycles
-int SPAM_KEY_DOWN_DURATION = 5; // Duration (in ms) keys remain down in a cycle
+int SPAM_KEY_DOWN_DURATION = 5; // Duration in ms keys remain down in a cycle
 
-// Global configurable booleans
+// Global toggles
 bool isLocked = false;            // Global toggle: spam feature enabled/disabled
 bool isCSpamActive = false;       // Spam trigger active flag
 bool isWASDStrafingEnabled = true; // Toggle for WASD Strafing
@@ -37,11 +37,11 @@ struct KeyState {
 
 // Global variables
 HHOOK hHook = NULL;
-NOTIFYICONDATA nid;
-std::map<int, KeyState> KeyInfo;   // Track state for keys: WASD
-std::vector<int> activeSpamKeys;   // Currently active keys for strafing
+NOTIFYICONDATA nid = {};
+std::unordered_map<int, KeyState> KeyInfo;  // Map for WASD keys that allows O(1) access.
+std::unordered_set<int> activeSpamKeys;     // Set of keys currently active for strafing
 
-// Event to signal spam thread for changes
+// Event to signal changes to the spam thread
 HANDLE hSpamEvent = NULL;
 
 // Forward declarations
@@ -53,35 +53,26 @@ DWORD WINAPI SpamThread(LPVOID lpParam);
 void loadConfig();
 
 // Loads configuration from "config.cfg" file.
-// Expected format: key=value pairs. Lines starting with '#' or empty lines are ignored.
 void loadConfig() {
     std::ifstream configFile("config.cfg");
     if (!configFile.is_open()) {
         std::cout << "Config file not found. Using defaults." << std::endl;
         return;
     }
-
     std::cout << "Loading configuration from config.cfg..." << std::endl;
     std::string line;
     while (std::getline(configFile, line)) {
-        // Trim off potential leading/trailing whitespace
-        std::istringstream lineStream(line);
-        std::string key;
-        if (line.empty() || line[0] == '#')
-            continue;
+        if (line.empty() || line[0] == '#') continue;
+        auto pos = line.find('=');
+        if (pos == std::string::npos) continue; // skip malformed lines
 
-        size_t pos = line.find('=');
-        if (pos == std::string::npos)
-            continue; // Malformed line, skip
-
-        key = line.substr(0, pos);
+        std::string key = line.substr(0, pos);
         std::string value = line.substr(pos + 1);
 
-        // Remove whitespace from key and value
-        key.erase(remove_if(key.begin(), key.end(), isspace), key.end());
-        value.erase(remove_if(value.begin(), value.end(), isspace), value.end());
+        // Remove whitespace (faster if using std::remove_if inline)
+        key.erase(std::remove_if(key.begin(), key.end(), ::isspace), key.end());
+        value.erase(std::remove_if(value.begin(), value.end(), ::isspace), value.end());
 
-        // Update timing configs and flags
         if (key == "SPAM_DELAY_MS")
             SPAM_DELAY_MS = std::stoi(value);
         else if (key == "SPAM_KEY_DOWN_DURATION")
@@ -90,13 +81,11 @@ void loadConfig() {
             isLocked = (value == "true" || value == "1");
         else if (key == "isWASDStrafingEnabled")
             isWASDStrafingEnabled = (value == "true" || value == "1");
-        // Update keybind customization
         else if (key == "KEY_SPAM_TRIGGER")
             KEY_SPAM_TRIGGER = static_cast<int>(value[0]);
     }
     configFile.close();
 
-    // Output loaded configuration values
     std::cout << "Configuration loaded:" << std::endl;
     std::cout << "  SPAM_DELAY_MS: " << SPAM_DELAY_MS << std::endl;
     std::cout << "  SPAM_KEY_DOWN_DURATION: " << SPAM_KEY_DOWN_DURATION << std::endl;
@@ -105,173 +94,171 @@ void loadConfig() {
     std::cout << "  KEY_SPAM_TRIGGER: " << static_cast<char>(KEY_SPAM_TRIGGER) << std::endl;
 }
 
-// Main function
+// Entry point
 int main() {
-    // Allocate a console for output (for Windows subsystem applications)
+    // Allocate console for debug output.
     AllocConsole();
     SetConsoleTitleA(APP_NAME);
 
-    // Load configuration from file
     loadConfig();
 
-    // Create an event for the spam thread. Auto-reset.
+    // Create a manual-reset event. Using auto-reset is fine because we only need a simple signal.
     hSpamEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+    if (!hSpamEvent) {
+        std::cerr << "Failed to create event" << std::endl;
+        return 1;
+    }
 
-    // Register window class
+    // Window class registration.
     WNDCLASSEX wc = { 0 };
     wc.cbSize = sizeof(WNDCLASSEX);
     wc.lpfnWndProc = WndProc;
     wc.hInstance = GetModuleHandle(NULL);
     wc.lpszClassName = TEXT("StrafeHelperClass");
-
     if (!RegisterClassEx(&wc)) {
         MessageBox(NULL, TEXT("Window Registration Failed!"), TEXT("Error"), MB_ICONEXCLAMATION | MB_OK);
         return 1;
     }
 
+    // Create dummy window.
     HWND hwnd = CreateWindowEx(0, wc.lpszClassName, TEXT("StrafeHelper"), WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 240, 120, NULL, NULL, wc.hInstance, NULL);
+        CW_USEDEFAULT, CW_USEDEFAULT, 240, 120,
+        NULL, NULL, wc.hInstance, NULL);
     if (!hwnd) {
         MessageBox(NULL, TEXT("Window Creation Failed!"), TEXT("Error"), MB_ICONEXCLAMATION | MB_OK);
         return 1;
     }
 
-    // Initialize tray icon
     InitNotifyIconData(hwnd);
 
-    // Initialize key states for WASD keys
-    KeyInfo['W'] = KeyState();
-    KeyInfo['A'] = KeyState();
-    KeyInfo['S'] = KeyState();
-    KeyInfo['D'] = KeyState();
+    // Initialize WASD keys states.
+    for (int key : { 'W', 'A', 'S', 'D' }) {
+        KeyInfo[key] = KeyState();
+    }
 
-    // Set the global keyboard hook
+    // Set the low-level keyboard hook.
     hHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, NULL, 0);
     if (!hHook) {
-        MessageBox(NULL, TEXT("Failed to install hook!"), TEXT("Error"), MB_ICONEXCLAMATION | MB_OK);
+        MessageBox(NULL, TEXT("Failed to install keyboard hook!"), TEXT("Error"), MB_ICONEXCLAMATION | MB_OK);
         return 1;
     }
 
-    // Start thread for spamming
-    CreateThread(NULL, 0, SpamThread, NULL, 0, NULL);
+    // Start the spam thread.
+    HANDLE hThread = CreateThread(NULL, 0, SpamThread, NULL, 0, NULL);
+    if (!hThread) {
+        MessageBox(NULL, TEXT("Failed to create spam thread!"), TEXT("Error"), MB_ICONEXCLAMATION | MB_OK);
+        return 1;
+    }
 
-    // Message loop
+    // Message loop.
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
 
-    // Cleanup resources
+    // Cleanup resources.
     UnhookWindowsHookEx(hHook);
     Shell_NotifyIcon(NIM_DELETE, &nid);
     CloseHandle(hSpamEvent);
-
+    CloseHandle(hThread);
     return 0;
 }
 
-// Keyboard hook procedure
+// Low-level keyboard hook procedure.
 LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0) {
-        KBDLLHOOKSTRUCT* pKeybd = (KBDLLHOOKSTRUCT*)lParam;
+        KBDLLHOOKSTRUCT* pKeybd = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
         int keyCode = pKeybd->vkCode;
 
-        // Update physical state for WASD keys
-        if (keyCode == 'W' || keyCode == 'A' || keyCode == 'S' || keyCode == 'D') {
-            if (wParam == WM_KEYDOWN) {
+        // Update WASD key physical state.
+        if (KeyInfo.find(keyCode) != KeyInfo.end()) {
+            if (wParam == WM_KEYDOWN)
                 KeyInfo[keyCode].physicalKeyDown = true;
-            }
-            else if (wParam == WM_KEYUP) {
+            else if (wParam == WM_KEYUP)
                 KeyInfo[keyCode].physicalKeyDown = false;
-            }
         }
 
-        // WASD Spam Logic using the custom spam trigger key
-        if (isWASDStrafingEnabled) {
-            if (keyCode == KEY_SPAM_TRIGGER) {
-                if (wParam == WM_KEYDOWN) {
-                    isCSpamActive = true;
-                    // Check each WASD key and add to active list if physically down.
-                    for (int key : { 'W', 'A', 'S', 'D' }) {
-                        if (KeyInfo[key].physicalKeyDown &&
-                            std::find(activeSpamKeys.begin(), activeSpamKeys.end(), key) == activeSpamKeys.end())
-                        {
-                            activeSpamKeys.push_back(key);
-                            KeyInfo[key].spamActive = true;
-                        }
+        // Manage spam trigger for WASD keys.
+        if (isWASDStrafingEnabled && keyCode == KEY_SPAM_TRIGGER) {
+            if (wParam == WM_KEYDOWN) {
+                isCSpamActive = true;
+                // For each WASD key, if pressed and not already active, add it.
+                for (int key : { 'W', 'A', 'S', 'D' }) {
+                    if (KeyInfo[key].physicalKeyDown && !KeyInfo[key].spamActive) {
+                        activeSpamKeys.insert(key);
+                        KeyInfo[key].spamActive = true;
                     }
-                    // Signal the spam thread that state has changed.
-                    SetEvent(hSpamEvent);
                 }
-                else if (wParam == WM_KEYUP) {
-                    isCSpamActive = false;
-                    // Ensure that any keys still active are explicitly released before clearing.
-                    for (int key : activeSpamKeys) {
-                        SendKey(key, false);
-                    }
-                    // Clear all pressed physical key states for WASD upon unholding the trigger
-                    for (int key : { 'W', 'A', 'S', 'D' }) {
-                        KeyInfo[key].physicalKeyDown = false;
-                        KeyInfo[key].spamActive = false;
-                    }
-                    activeSpamKeys.clear();
-                    SetEvent(hSpamEvent);
-                }
-                return CallNextHookEx(hHook, nCode, wParam, lParam);
+                SetEvent(hSpamEvent);
             }
-
-            // Block physical messages for WASD keys if we're spamming and not locked.
-            if (!(pKeybd->flags & LLKHF_INJECTED) && !isLocked && isCSpamActive) {
-                if (keyCode == 'W' || keyCode == 'A' || keyCode == 'S' || keyCode == 'D') {
-                    if (wParam == WM_KEYDOWN) {
-                        if (std::find(activeSpamKeys.begin(), activeSpamKeys.end(), keyCode) == activeSpamKeys.end()) {
-                            activeSpamKeys.push_back(keyCode);
-                            KeyInfo[keyCode].spamActive = true;
-                            SetEvent(hSpamEvent);
-                        }
-                        return 1; // Block event
-                    }
-                    else if (wParam == WM_KEYUP) {
-                        auto it = std::find(activeSpamKeys.begin(), activeSpamKeys.end(), keyCode);
-                        if (it != activeSpamKeys.end()) {
-                            SendKey(keyCode, false);
-                            KeyInfo[keyCode].spamActive = false;
-                            activeSpamKeys.erase(it);
-                            SetEvent(hSpamEvent);
-                        }
-                        return 1; // Block event
-                    }
+            else if (wParam == WM_KEYUP) {
+                isCSpamActive = false;
+                // On trigger release, send key-up for all active keys.
+                for (int key : activeSpamKeys) {
+                    SendKey(key, false);
+                    KeyInfo[key].spamActive = false;
                 }
+                activeSpamKeys.clear();
+                // Also clear physical key state for WASD keys.
+                for (int key : { 'W', 'A', 'S', 'D' }) {
+                    KeyInfo[key].physicalKeyDown = false;
+                }
+                SetEvent(hSpamEvent);
+            }
+            return CallNextHookEx(hHook, nCode, wParam, lParam);
+        }
+
+        // Block repeated physical WASD events during spamming (unless locked or injected).
+        if (!isLocked && isCSpamActive && KeyInfo.find(keyCode) != KeyInfo.end() && !(pKeybd->flags & LLKHF_INJECTED)) {
+            if (wParam == WM_KEYDOWN) {
+                if (activeSpamKeys.find(keyCode) == activeSpamKeys.end()) {
+                    activeSpamKeys.insert(keyCode);
+                    KeyInfo[keyCode].spamActive = true;
+                    SetEvent(hSpamEvent);
+                }
+                return 1;  // Block this event.
+            }
+            else if (wParam == WM_KEYUP) {
+                if (activeSpamKeys.find(keyCode) != activeSpamKeys.end()) {
+                    SendKey(keyCode, false);
+                    KeyInfo[keyCode].spamActive = false;
+                    activeSpamKeys.erase(keyCode);
+                    SetEvent(hSpamEvent);
+                }
+                return 1;  // Block this event.
             }
         }
     }
     return CallNextHookEx(hHook, nCode, wParam, lParam);
 }
 
-// Spam thread: Sends grouped WASD key events for strafing.
+// Spam thread sends grouped WASD key events.
 DWORD WINAPI SpamThread(LPVOID lpParam) {
-    INPUT inputs[16]; // Array to hold grouped INPUT records.
+    // Use a fixed array of INPUT structures sized for our 4 keys.
+    INPUT inputs[4];
     while (true) {
-        // Wait until state changes or timeout for next cycle.
+        // Wait for state change or timeout (cycles may occur every SPAM_DELAY_MS ms).
         WaitForSingleObject(hSpamEvent, SPAM_DELAY_MS);
 
-        if (isWASDStrafingEnabled && !activeSpamKeys.empty() && isCSpamActive) {
-            // Capture the list of keys to spam at the start of the cycle
+        if (isWASDStrafingEnabled && isCSpamActive && !activeSpamKeys.empty()) {
             std::vector<int> keysToSpam;
+            // Collect keys that are active.
             for (int key : activeSpamKeys) {
-                if (KeyInfo[key].spamActive) {
+                if (KeyInfo[key].spamActive)
                     keysToSpam.push_back(key);
-                }
             }
             if (!keysToSpam.empty()) {
                 int count = 0;
-                // Build array of key-down events for the captured keys
+                // Build key-down events.
                 for (int key : keysToSpam) {
                     inputs[count].type = INPUT_KEYBOARD;
                     inputs[count].ki.wVk = key;
                     inputs[count].ki.wScan = MapVirtualKey(key, 0);
                     inputs[count].ki.dwFlags = KEYEVENTF_SCANCODE;
-                    count++;
+                    inputs[count].ki.time = 0;
+                    inputs[count].ki.dwExtraInfo = 0;
+                    ++count;
                 }
                 if (count > 0)
                     SendInput(count, inputs, sizeof(INPUT));
@@ -279,13 +266,15 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
                 Sleep(SPAM_KEY_DOWN_DURATION);
 
                 count = 0;
-                // Build array of key-up events for the same captured keys
+                // Build key-up events.
                 for (int key : keysToSpam) {
                     inputs[count].type = INPUT_KEYBOARD;
                     inputs[count].ki.wVk = key;
                     inputs[count].ki.wScan = MapVirtualKey(key, 0);
                     inputs[count].ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
-                    count++;
+                    inputs[count].ki.time = 0;
+                    inputs[count].ki.dwExtraInfo = 0;
+                    ++count;
                 }
                 if (count > 0)
                     SendInput(count, inputs, sizeof(INPUT));
@@ -295,7 +284,7 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
     return 0;
 }
 
-// Send a simulated key event.
+// Sends a key event.
 void SendKey(int targetKey, bool keyDown) {
     INPUT input = { 0 };
     input.type = INPUT_KEYBOARD;
@@ -305,7 +294,7 @@ void SendKey(int targetKey, bool keyDown) {
     SendInput(1, &input, sizeof(INPUT));
 }
 
-// Initialize the system tray icon.
+// Initialize system tray icon.
 void InitNotifyIconData(HWND hwnd) {
     nid.cbSize = sizeof(NOTIFYICONDATA);
     nid.hWnd = hwnd;
@@ -317,7 +306,7 @@ void InitNotifyIconData(HWND hwnd) {
     Shell_NotifyIcon(NIM_ADD, &nid);
 }
 
-// Window procedure for tray menu events.
+// Window procedure to handle tray icon and menu events.
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_TRAYICON:
@@ -326,8 +315,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             GetCursorPos(&pt);
             SetForegroundWindow(hwnd);
             HMENU hMenu = CreatePopupMenu();
-            AppendMenu(hMenu, MF_STRING | (isWASDStrafingEnabled ? MF_CHECKED : MF_UNCHECKED), ID_TRAY_WASD_STRAFING,
-                TEXT("WASD Strafing"));
+            AppendMenu(hMenu, MF_STRING | (isWASDStrafingEnabled ? MF_CHECKED : 0), ID_TRAY_WASD_STRAFING, TEXT("WASD Strafing"));
             AppendMenu(hMenu, MF_SEPARATOR, 0, NULL);
             AppendMenu(hMenu, MF_STRING, ID_TRAY_EXIT_CONTEXT_MENU_ITEM, TEXT("Exit StrafeHelper"));
             TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hwnd, NULL);
@@ -341,6 +329,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
         case ID_TRAY_WASD_STRAFING:
             isWASDStrafingEnabled = !isWASDStrafingEnabled;
+            // If disabling, make sure to send key-ups and clear state.
             if (!isWASDStrafingEnabled) {
                 for (int key : activeSpamKeys) {
                     SendKey(key, false);
