@@ -261,103 +261,98 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
         return CallNextHookEx(hHook, nCode, wParam, lParam);
     }
 
-    // Update physical state for WASD keys
+    // Always update physical state for WASD keys regardless of spam state
     if (keyCode == 'W' || keyCode == 'A' || keyCode == 'S' || keyCode == 'D') {
         auto keyState = KeyInfo.find(keyCode);
         if (keyState != KeyInfo.end()) {
-            if (isKeyDown) {
+            if (isKeyDown && !isInjected) {
                 keyState->second->physicalKeyDown = true;
+                // If not spamming, let the key event through
+                if (!isCSpamActive) {
+                    return CallNextHookEx(hHook, nCode, wParam, lParam);
+                }
             }
-            else if (isKeyUp) {
+            else if (isKeyUp && !isInjected) {
                 keyState->second->physicalKeyDown = false;
+                // If not spamming, let the key event through
+                if (!isCSpamActive) {
+                    return CallNextHookEx(hHook, nCode, wParam, lParam);
+                }
             }
         }
     }
 
-    // WASD Spam Logic using the custom spam trigger key
-    if (isWASDStrafingEnabled) {
-        if (keyCode == KEY_SPAM_TRIGGER) {
-            if (isKeyDown) {
-                isCSpamActive = true;
-
-                // Lock the mutex to safely modify shared data
-                {
-                    std::lock_guard<std::mutex> lock(spamKeysMutex);
-
-                    // Check each WASD key and add to active list if physically down
-                    for (int key : { 'W', 'A', 'S', 'D' }) {
-                        auto keyState = KeyInfo.find(key);
-                        if (keyState != KeyInfo.end() && keyState->second->physicalKeyDown &&
-                            std::find(activeSpamKeys.begin(), activeSpamKeys.end(), key) == activeSpamKeys.end())
-                        {
-                            activeSpamKeys.push_back(key);
-                            keyState->second->spamActive = true;
+    // Handle spam trigger key (C)
+    if (keyCode == KEY_SPAM_TRIGGER) {
+        if (isKeyDown) {
+            isCSpamActive = true;
+            {
+                std::lock_guard<std::mutex> lock(spamKeysMutex);
+                // Check each WASD key and add to active list if physically down
+                for (int key : { 'W', 'A', 'S', 'D' }) {
+                    auto keyState = KeyInfo.find(key);
+                    if (keyState != KeyInfo.end() && keyState->second->physicalKeyDown &&
+                        std::find(activeSpamKeys.begin(), activeSpamKeys.end(), key) == activeSpamKeys.end())
+                    {
+                        activeSpamKeys.push_back(key);
+                        keyState->second->spamActive = true;
+                    }
+                }
+            }
+            SetEvent(hSpamEvent);
+        }
+        else if (isKeyUp) {
+            isCSpamActive = false;
+            {
+                std::lock_guard<std::mutex> lock(spamKeysMutex);
+                // Clear spam states but maintain physical key states
+                for (int key : activeSpamKeys) {
+                    auto keyState = KeyInfo.find(key);
+                    if (keyState != KeyInfo.end()) {
+                        keyState->second->spamActive = false;
+                        // If key is physically down, simulate a key press to restore state
+                        if (keyState->second->physicalKeyDown) {
+                            INPUT input = {};
+                            input.type = INPUT_KEYBOARD;
+                            input.ki.wVk = key;
+                            input.ki.dwFlags = 0;  // Key press
+                            SendInput(1, &input, sizeof(INPUT));
                         }
                     }
                 }
+                activeSpamKeys.clear();
+            }
+            SetEvent(hSpamEvent);
+        }
+        return CallNextHookEx(hHook, nCode, wParam, lParam);
+    }
 
-                // Signal the spam thread that state has changed
-                SetEvent(hSpamEvent);
+    // Handle WASD events during active spam
+    if (!isInjected && !isLocked && isCSpamActive) {
+        if (keyCode == 'W' || keyCode == 'A' || keyCode == 'S' || keyCode == 'D') {
+            std::lock_guard<std::mutex> lock(spamKeysMutex);
+            if (isKeyDown) {
+                if (std::find(activeSpamKeys.begin(), activeSpamKeys.end(), keyCode) == activeSpamKeys.end()) {
+                    activeSpamKeys.push_back(keyCode);
+                    auto keyState = KeyInfo.find(keyCode);
+                    if (keyState != KeyInfo.end()) {
+                        keyState->second->spamActive = true;
+                    }
+                    SetEvent(hSpamEvent);
+                }
+                return 1; // Block event
             }
             else if (isKeyUp) {
-                isCSpamActive = false;
-
-                {
-                    std::lock_guard<std::mutex> lock(spamKeysMutex);
-
-                    // Only clear spamActive state for keys that were actually in activeSpamKeys
-                    for (int key : activeSpamKeys) {
-                        auto keyState = KeyInfo.find(key);
-                        if (keyState != KeyInfo.end()) {
-                            keyState->second->spamActive = false;
-                        }
-
-                        // Send key up event only for keys that were being spammed
-                        INPUT input = {};
-                        input.type = INPUT_KEYBOARD;
-                        input.ki.wVk = key;
-                        input.ki.dwFlags = KEYEVENTF_KEYUP;
-                        SendInput(1, &input, sizeof(INPUT));
+                auto it = std::find(activeSpamKeys.begin(), activeSpamKeys.end(), keyCode);
+                if (it != activeSpamKeys.end()) {
+                    auto keyState = KeyInfo.find(keyCode);
+                    if (keyState != KeyInfo.end()) {
+                        keyState->second->spamActive = false;
                     }
-                    activeSpamKeys.clear();
+                    activeSpamKeys.erase(it);
+                    SetEvent(hSpamEvent);
                 }
-
-                // Signal the spam thread
-                SetEvent(hSpamEvent);
-            }
-            return CallNextHookEx(hHook, nCode, wParam, lParam);
-        }
-
-        // Handle WASD key events when spamming is active
-        if (!isInjected && !isLocked && isCSpamActive) {
-            if (keyCode == 'W' || keyCode == 'A' || keyCode == 'S' || keyCode == 'D') {
-                {
-                    std::lock_guard<std::mutex> lock(spamKeysMutex);
-
-                    if (isKeyDown) {
-                        if (std::find(activeSpamKeys.begin(), activeSpamKeys.end(), keyCode) == activeSpamKeys.end()) {
-                            activeSpamKeys.push_back(keyCode);
-                            auto keyState = KeyInfo.find(keyCode);
-                            if (keyState != KeyInfo.end()) {
-                                keyState->second->spamActive = true;
-                            }
-                            SetEvent(hSpamEvent);
-                        }
-                        return 1; // Block event
-                    }
-                    else if (isKeyUp) {
-                        auto it = std::find(activeSpamKeys.begin(), activeSpamKeys.end(), keyCode);
-                        if (it != activeSpamKeys.end()) {
-                            auto keyState = KeyInfo.find(keyCode);
-                            if (keyState != KeyInfo.end()) {
-                                keyState->second->spamActive = false;
-                            }
-                            activeSpamKeys.erase(it);
-                            SetEvent(hSpamEvent);
-                        }
-                        return 1; // Block event
-                    }
-                }
+                return 1; // Block event
             }
         }
     }
