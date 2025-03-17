@@ -23,4 +23,9 @@
     <None Include="readme.md" />
     <None Include="config.cfg" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="config.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
 </Project>
