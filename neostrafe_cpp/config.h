@@ -5,6 +5,8 @@
 #include <fstream>
 #include <ctime>
 #include <windows.h>
+#include <iomanip>  // Added for std::setprecision
+#include <sstream>  // Added for stringstream
 
 class Config {
 private:
@@ -26,6 +28,12 @@ private:
         showConsole.store(true);
         startWithWindows.store(false);
         minimizeToTray.store(true);
+        isSuperGlideEnabled.store(false);
+        targetFPS.store(144);
+        superGlideTriggerKey.store(VK_SPACE);
+        wasdStrafingTriggerKey.store('C');
+        superGlideJumpDelay.store(0.0);
+        superGlideCrouchDelay.store(0.00094);
     }
 
 public:
@@ -37,6 +45,12 @@ public:
     std::atomic<bool> showConsole;
     std::atomic<bool> startWithWindows;
     std::atomic<bool> minimizeToTray;
+    std::atomic<bool> isSuperGlideEnabled;
+    std::atomic<int> targetFPS;
+    std::atomic<int> superGlideTriggerKey;
+    std::atomic<int> wasdStrafingTriggerKey;
+    std::atomic<double> superGlideJumpDelay;
+    std::atomic<double> superGlideCrouchDelay;
 
     static Config* getInstance() {
         if (instance == nullptr) {
@@ -57,7 +71,9 @@ public:
     bool load() {
         std::ifstream file(configPath);
         if (!file.is_open()) {
-            std::cout << "Creating new configuration file...\n";
+            if (showConsole.load()) {
+                std::cout << "Creating new configuration file...\n";
+            }
             save(); // Create default config
             return false;
         }
@@ -72,7 +88,6 @@ public:
             std::string key = line.substr(0, pos);
             std::string value = line.substr(pos + 1);
 
-            // Remove whitespace
             key.erase(remove_if(key.begin(), key.end(), isspace), key.end());
             value.erase(remove_if(value.begin(), value.end(), isspace), value.end());
 
@@ -83,17 +98,37 @@ public:
                     spamKeyDownDuration.store(std::stoi(value));
                 else if (key == "WASD_STRAFING_ENABLED")
                     isWASDStrafingEnabled.store(value == "true" || value == "1");
-                else if (key == "SPAM_TRIGGER_KEY")
-                    spamTriggerKey.store(value[0]);
+                else if (key == "WASD_STRAFING_TRIGGER_KEY") {
+                    if (value.length() == 1)
+                        wasdStrafingTriggerKey.store(value[0]);
+                    else
+                        wasdStrafingTriggerKey.store(std::stoi(value));
+                }
+                else if (key == "SUPERGLIDE_TRIGGER_KEY") {
+                    if (value.length() == 1)
+                        superGlideTriggerKey.store(value[0]);
+                    else
+                        superGlideTriggerKey.store(std::stoi(value));
+                }
                 else if (key == "SHOW_CONSOLE")
                     showConsole.store(value == "true" || value == "1");
                 else if (key == "START_WITH_WINDOWS")
                     startWithWindows.store(value == "true" || value == "1");
                 else if (key == "MINIMIZE_TO_TRAY")
                     minimizeToTray.store(value == "true" || value == "1");
+                else if (key == "SUPERGLIDE_ENABLED")
+                    isSuperGlideEnabled.store(value == "true" || value == "1");
+                else if (key == "TARGET_FPS")
+                    targetFPS.store(std::stoi(value));
+                else if (key == "SUPERGLIDE_JUMP_DELAY")
+                    superGlideJumpDelay.store(std::stod(value));
+                else if (key == "SUPERGLIDE_CROUCH_DELAY")
+                    superGlideCrouchDelay.store(std::stod(value));
             }
             catch (const std::exception& e) {
-                std::cout << "Error parsing config value: " << key << "=" << value << "\n";
+                if (showConsole.load()) {
+                    std::cout << "Error parsing config value: " << key << "=" << value << "\n";
+                }
             }
         }
         file.close();
@@ -104,9 +139,14 @@ public:
         updateLastSaveTime();
         std::ofstream file(configPath);
         if (!file.is_open()) {
-            std::cout << "Failed to save configuration!\n";
+            if (showConsole.load()) {
+                std::cout << "Failed to save configuration!\n";
+            }
             return false;
         }
+
+        // Use stringstream for number formatting
+        std::stringstream ss;
 
         file << "# StrafeHelper Configuration\n";
         file << "# Last updated: " << lastSaveTime << " UTC\n";
@@ -118,7 +158,22 @@ public:
 
         file << "# Feature Settings\n";
         file << "WASD_STRAFING_ENABLED=" << (isWASDStrafingEnabled.load() ? "true" : "false") << "\n";
-        file << "SPAM_TRIGGER_KEY=" << static_cast<char>(spamTriggerKey.load()) << "\n\n";
+        file << "WASD_STRAFING_TRIGGER_KEY=" << wasdStrafingTriggerKey.load() << "\n";
+        file << "SUPERGLIDE_TRIGGER_KEY=" << superGlideTriggerKey.load() << "\n\n";
+
+        file << "# SuperGlide Settings\n";
+        file << "SUPERGLIDE_ENABLED=" << (isSuperGlideEnabled.load() ? "true" : "false") << "\n";
+        file << "TARGET_FPS=" << targetFPS.load() << "\n";
+
+        // Use stringstream for precise floating-point output
+        ss << std::fixed << std::setprecision(5);
+        ss << superGlideJumpDelay.load();
+        file << "SUPERGLIDE_JUMP_DELAY=" << ss.str() << "\n";
+
+        ss.str("");  // Clear stringstream
+        ss << std::fixed << std::setprecision(5);
+        ss << superGlideCrouchDelay.load();
+        file << "SUPERGLIDE_CROUCH_DELAY=" << ss.str() << "\n\n";
 
         file << "# Application Settings\n";
         file << "SHOW_CONSOLE=" << (showConsole.load() ? "true" : "false") << "\n";
@@ -146,6 +201,10 @@ public:
         }
         startWithWindows.store(enable);
         save();
+    }
+
+    double getFrameTime() const {
+        return 1000.0 / targetFPS.load();
     }
 };
 

@@ -1,10 +1,11 @@
 ﻿#include <windows.h>
 #include <shellapi.h>
 #include <iostream>
+#include <cstdio>
+#include <mutex>
 #include "inputs.h"
 #include "Config.h"
-#include <shellapi.h>
-#include <tchar.h>
+#include "superglide.h"
 
 // Constants
 #define ID_TRAY_APP_ICON                1001
@@ -18,12 +19,16 @@
 #define ID_TRAY_SAVE_CONFIG            3009
 #define ID_TRAY_RELOAD_CONFIG          3010
 #define ID_TRAY_ABOUT                  3011
+#define ID_TRAY_SUPERGLIDE             3012
+#define ID_TRAY_TARGET_FPS_144         3013
+#define ID_TRAY_TARGET_FPS_165         3014
+#define ID_TRAY_TARGET_FPS_240         3015
 #define WM_TRAYICON                    (WM_USER + 1)
 
 const char* APP_NAME = "StrafeHelper";
 const char* VERSION = "3.0_game_compatible";
 const char* AUTHOR = "fL0P1337";
-const char* CURRENT_TIME = "2025-03-18 00:29:11";
+const char* CURRENT_TIME = "2025-03-18 11:04:52";
 const char* CURRENT_USER = "fL0P1337";
 
 NOTIFYICONDATA nid;
@@ -36,7 +41,6 @@ void InitNotifyIconData(HWND hwnd) {
     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid.uCallbackMessage = WM_TRAYICON;
     nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
-    _tcscpy_s(nid.szTip, _countof(nid.szTip), TEXT("StrafeHelper (Right-click for menu)"));
     Shell_NotifyIcon(NIM_ADD, &nid);
 }
 
@@ -44,6 +48,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     static HMENU hMenu = NULL;
     static HMENU hSettingsMenu = NULL;
     static HMENU hDelayMenu = NULL;
+    static HMENU hFPSMenu = NULL;
     static FILE* dummy;
 
     switch (msg) {
@@ -51,19 +56,30 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         hMenu = CreatePopupMenu();
         hSettingsMenu = CreatePopupMenu();
         hDelayMenu = CreatePopupMenu();
+        hFPSMenu = CreatePopupMenu();
 
+        // Delay submenu
         AppendMenu(hDelayMenu, MF_STRING, ID_TRAY_DELAY_1MS, TEXT("1ms (Fastest)"));
         AppendMenu(hDelayMenu, MF_STRING, ID_TRAY_DELAY_2MS, TEXT("2ms (Balanced)"));
         AppendMenu(hDelayMenu, MF_STRING, ID_TRAY_DELAY_5MS, TEXT("5ms (Stable)"));
 
+        // FPS submenu
+        AppendMenu(hFPSMenu, MF_STRING, ID_TRAY_TARGET_FPS_144, TEXT("144 FPS"));
+        AppendMenu(hFPSMenu, MF_STRING, ID_TRAY_TARGET_FPS_165, TEXT("165 FPS"));
+        AppendMenu(hFPSMenu, MF_STRING, ID_TRAY_TARGET_FPS_240, TEXT("240 FPS"));
+
+        // Settings submenu
         AppendMenu(hSettingsMenu, MF_STRING | MF_POPUP, (UINT_PTR)hDelayMenu, TEXT("Spam Delay"));
+        AppendMenu(hSettingsMenu, MF_STRING | MF_POPUP, (UINT_PTR)hFPSMenu, TEXT("Target FPS"));
         AppendMenu(hSettingsMenu, MF_SEPARATOR, 0, NULL);
         AppendMenu(hSettingsMenu, MF_STRING, ID_TRAY_STARTUP, TEXT("Start with Windows"));
         AppendMenu(hSettingsMenu, MF_STRING, ID_TRAY_CONSOLE, TEXT("Show Console"));
         AppendMenu(hSettingsMenu, MF_STRING, ID_TRAY_SAVE_CONFIG, TEXT("Save Configuration"));
         AppendMenu(hSettingsMenu, MF_STRING, ID_TRAY_RELOAD_CONFIG, TEXT("Reload Configuration"));
 
+        // Main menu
         AppendMenu(hMenu, MF_STRING, ID_TRAY_WASD_STRAFING, TEXT("WASD Strafing"));
+        AppendMenu(hMenu, MF_STRING, ID_TRAY_SUPERGLIDE, TEXT("SuperGlide"));
         AppendMenu(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hSettingsMenu, TEXT("Settings"));
         AppendMenu(hMenu, MF_SEPARATOR, 0, NULL);
         AppendMenu(hMenu, MF_STRING, ID_TRAY_ABOUT, TEXT("About"));
@@ -77,8 +93,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             GetCursorPos(&pt);
             SetForegroundWindow(hwnd);
 
+            // Update checkmarks
             CheckMenuItem(hMenu, ID_TRAY_WASD_STRAFING,
                 Config::getInstance()->isWASDStrafingEnabled.load() ? MF_CHECKED : MF_UNCHECKED);
+            CheckMenuItem(hMenu, ID_TRAY_SUPERGLIDE,
+                Config::getInstance()->isSuperGlideEnabled.load() ? MF_CHECKED : MF_UNCHECKED);
             CheckMenuItem(hSettingsMenu, ID_TRAY_STARTUP,
                 Config::getInstance()->startWithWindows.load() ? MF_CHECKED : MF_UNCHECKED);
             CheckMenuItem(hSettingsMenu, ID_TRAY_CONSOLE,
@@ -90,6 +109,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 Config::getInstance()->spamDelayMs.load() == 2 ? MF_CHECKED : MF_UNCHECKED);
             CheckMenuItem(hDelayMenu, ID_TRAY_DELAY_5MS,
                 Config::getInstance()->spamDelayMs.load() == 5 ? MF_CHECKED : MF_UNCHECKED);
+
+            CheckMenuItem(hFPSMenu, ID_TRAY_TARGET_FPS_144,
+                Config::getInstance()->targetFPS.load() == 144 ? MF_CHECKED : MF_UNCHECKED);
+            CheckMenuItem(hFPSMenu, ID_TRAY_TARGET_FPS_165,
+                Config::getInstance()->targetFPS.load() == 165 ? MF_CHECKED : MF_UNCHECKED);
+            CheckMenuItem(hFPSMenu, ID_TRAY_TARGET_FPS_240,
+                Config::getInstance()->targetFPS.load() == 240 ? MF_CHECKED : MF_UNCHECKED);
 
             TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN,
                 pt.x, pt.y, 0, hwnd, NULL);
@@ -107,6 +133,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             bool newState = !Config::getInstance()->isWASDStrafingEnabled.load();
             Config::getInstance()->isWASDStrafingEnabled.store(newState);
             Config::getInstance()->save();
+            break;
+        }
+
+        case ID_TRAY_SUPERGLIDE: {
+            bool newState = !Config::getInstance()->isSuperGlideEnabled.load();
+            Config::getInstance()->isSuperGlideEnabled.store(newState);
+            Config::getInstance()->save();
+            if (Config::getInstance()->showConsole.load()) {
+                std::cout << "SuperGlide " << (newState ? "enabled" : "disabled")
+                    << " at " << CURRENT_TIME << " UTC\n";
+            }
             break;
         }
 
@@ -128,6 +165,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             Config::getInstance()->save();
             break;
 
+        case ID_TRAY_TARGET_FPS_144:
+            Config::getInstance()->targetFPS.store(144);
+            Config::getInstance()->save();
+            break;
+
+        case ID_TRAY_TARGET_FPS_165:
+            Config::getInstance()->targetFPS.store(165);
+            Config::getInstance()->save();
+            break;
+
+        case ID_TRAY_TARGET_FPS_240:
+            Config::getInstance()->targetFPS.store(240);
+            Config::getInstance()->save();
+            break;
+
         case ID_TRAY_STARTUP:
             Config::getInstance()->setStartWithWindows(
                 !Config::getInstance()->startWithWindows.load());
@@ -138,6 +190,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             Config::getInstance()->showConsole.store(newState);
             if (newState) {
                 AllocConsole();
+                FILE* dummy;
                 freopen_s(&dummy, "CONOUT$", "w", stdout);
                 SetConsoleTitleA(APP_NAME);
 
@@ -147,6 +200,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 std::cout << "- Spam Delay: " << Config::getInstance()->spamDelayMs.load() << "ms\n";
                 std::cout << "- Key Down Duration: " << Config::getInstance()->spamKeyDownDuration.load() << "ms\n";
                 std::cout << "- WASD Strafing: " << (Config::getInstance()->isWASDStrafingEnabled.load() ? "Enabled" : "Disabled") << "\n";
+                std::cout << "- SuperGlide: " << (Config::getInstance()->isSuperGlideEnabled.load() ? "Enabled" : "Disabled") << "\n";
+                std::cout << "- Target FPS: " << Config::getInstance()->targetFPS.load() << "\n";
                 std::cout << "- Trigger Key: " << static_cast<char>(Config::getInstance()->spamTriggerKey.load()) << "\n";
             }
             else {
@@ -182,7 +237,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 "Created by: " + std::string(AUTHOR) + "\n"
                 "Current User: " + std::string(CURRENT_USER) + "\n"
                 "Time: " + std::string(CURRENT_TIME) + " UTC\n\n"
-                "Hold C + WASD for enhanced strafing\n"
+                "Features:\n"
+                "- Hold C + WASD for enhanced strafing\n"
+                "- SuperGlide with configurable FPS\n"
                 "Right-click tray icon for settings";
 
             MessageBoxA(hwnd, aboutMsg.c_str(), "About StrafeHelper", MB_ICONINFORMATION | MB_OK);
@@ -193,6 +250,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     }
 
     case WM_DESTROY: {
+        if (hFPSMenu) DestroyMenu(hFPSMenu);
         if (hDelayMenu) DestroyMenu(hDelayMenu);
         if (hSettingsMenu) DestroyMenu(hSettingsMenu);
         if (hMenu) DestroyMenu(hMenu);
@@ -220,7 +278,9 @@ int main() {
         std::cout << APP_NAME << " v" << VERSION << " started!\n";
         std::cout << "Created by: " << AUTHOR << "\n";
         std::cout << "Current time (UTC): " << CURRENT_TIME << "\n\n";
-        std::cout << "Press C + W/A/S/D for optimized game strafing.\n";
+        std::cout << "Controls:\n";
+        std::cout << "- Press C + W/A/S/D for optimized game strafing\n";
+        std::cout << "- SuperGlide available with configurable FPS\n";
     }
 
     auto inputManager = inputs::InputManager::getInstance();
@@ -280,10 +340,12 @@ int main() {
         std::cout << "\nConfiguration:\n";
         std::cout << "-------------\n";
         std::cout << "User: " << CURRENT_USER << "\n";
-        std::cout << "Start Time: " << CURRENT_TIME << " UTC\n";
+        std::cout << "Start Time: " << "2025-03-18 11:06:27" << " UTC\n";
         std::cout << "Spam Delay: " << Config::getInstance()->spamDelayMs.load() << "ms\n";
         std::cout << "Key Down Duration: " << Config::getInstance()->spamKeyDownDuration.load() << "ms\n";
         std::cout << "WASD Strafing: " << (Config::getInstance()->isWASDStrafingEnabled.load() ? "Enabled" : "Disabled") << "\n";
+        std::cout << "SuperGlide: " << (Config::getInstance()->isSuperGlideEnabled.load() ? "Enabled" : "Disabled") << "\n";
+        std::cout << "Target FPS: " << Config::getInstance()->targetFPS.load() << "\n";
         std::cout << "Trigger Key: " << static_cast<char>(Config::getInstance()->spamTriggerKey.load()) << "\n\n";
         std::cout << "Game Compatibility Mode: Enabled\n";
         std::cout << "DirectInput Status: Active\n";
@@ -291,6 +353,7 @@ int main() {
         std::cout << "Controls:\n";
         std::cout << "- Right-click tray icon for menu\n";
         std::cout << "- Hold C + WASD for enhanced strafing\n";
+        std::cout << "- SuperGlide with configurable FPS settings\n";
         std::cout << "- ESC to exit\n\n";
     }
 
@@ -306,11 +369,13 @@ int main() {
 
     if (Config::getInstance()->showConsole.load()) {
         std::cout << "\nShutting down...\n";
-        std::cout << "End Time: " << CURRENT_TIME << " UTC\n";
+        std::cout << "End Time: " << "2025-03-18 11:06:27" << " UTC\n";
         std::cout << "User: " << CURRENT_USER << "\n";
         std::cout << "Final Settings:\n";
         std::cout << "- Spam Delay: " << Config::getInstance()->spamDelayMs.load() << "ms\n";
         std::cout << "- WASD Strafing: " << (Config::getInstance()->isWASDStrafingEnabled.load() ? "Enabled" : "Disabled") << "\n";
+        std::cout << "- SuperGlide: " << (Config::getInstance()->isSuperGlideEnabled.load() ? "Enabled" : "Disabled") << "\n";
+        std::cout << "- Target FPS: " << Config::getInstance()->targetFPS.load() << "\n";
     }
 
     // Save final configuration
@@ -322,8 +387,8 @@ int main() {
     // Small delay to show cleanup messages
     if (Config::getInstance()->showConsole.load()) {
         std::cout << "Cleanup complete. Thanks for using " << APP_NAME << "!\n";
-        std::cout << "Session ended at: " << "2025-03-18 00:30:59" << " UTC\n";
-        std::cout << "User: " << "fL0P1337" << "\n";
+        std::cout << "Session ended at: " << "2025-03-18 11:06:27" << " UTC\n";
+        std::cout << "User: " << CURRENT_USER << "\n";
         Sleep(1500);
         FreeConsole();
     }
