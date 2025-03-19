@@ -3,14 +3,10 @@
 #include <atomic>
 #include <vector>
 #include <mutex>
-#include <dinput.h>
 #include "Config.h"
 #include <chrono>
 #include <unordered_map>
 #include <algorithm>
-
-#pragma comment(lib, "dinput8.lib")
-#pragma comment(lib, "dxguid.lib")
 
 namespace inputs {
 
@@ -23,18 +19,13 @@ namespace inputs {
         std::atomic<bool> physicalKeyDown;
         std::atomic<bool> spamActive;
         std::atomic<bool> wasPhysicallyDown;
-        std::chrono::steady_clock::time_point lastStateChange;
 
-        KeyState() : physicalKeyDown(false), spamActive(false), wasPhysicallyDown(false) {
-            lastStateChange = std::chrono::steady_clock::now();
-        }
+        KeyState() : physicalKeyDown(false), spamActive(false), wasPhysicallyDown(false) {}
     };
 
     class InputManager {
     private:
         static InputManager* instance;
-        LPDIRECTINPUT8 g_pDI;
-        LPDIRECTINPUTDEVICE8 g_pKeyboard;
         HHOOK hHook;
         std::unordered_map<int, KeyState*> keyInfo;
         std::vector<int> activeSpamKeys;
@@ -44,7 +35,7 @@ namespace inputs {
         HANDLE hSpamThreadHandle;
         std::atomic<bool> isCSpamActive;
 
-        InputManager() : g_pDI(nullptr), g_pKeyboard(nullptr), hHook(NULL),
+        InputManager() : hHook(NULL),
             hSpamEvent(NULL), hTerminateEvent(NULL), hSpamThreadHandle(NULL),
             isCSpamActive(false)
         {
@@ -52,13 +43,13 @@ namespace inputs {
         }
 
         DWORD spamThread();
-        // Friends to allow callbacks access private members
         friend DWORD WINAPI SpamThreadProc(LPVOID lpParam);
         friend LRESULT CALLBACK KeyboardProcImpl(int nCode, WPARAM wParam, LPARAM lParam);
+
     public:
         static InputManager* getInstance();
         void initializeKeyStates();
-        bool initDirectInput(HWND hwnd);
+        bool initRawInput(HWND hwnd);
         bool initializeEvents();
         bool setupKeyboardHook();
         void cleanup();
@@ -92,23 +83,13 @@ namespace inputs {
         keyInfo['D'] = new KeyState();
     }
 
-    bool InputManager::initDirectInput(HWND hwnd) {
-        if (FAILED(DirectInput8Create(GetModuleHandle(NULL), DIRECTINPUT_VERSION,
-            IID_IDirectInput8, (void**)&g_pDI, NULL)))
-            return false;
-
-        if (FAILED(g_pDI->CreateDevice(GUID_SysKeyboard, &g_pKeyboard, NULL)))
-            return false;
-
-        if (FAILED(g_pKeyboard->SetDataFormat(&c_dfDIKeyboard)))
-            return false;
-
-        if (FAILED(g_pKeyboard->SetCooperativeLevel(hwnd,
-            DISCL_FOREGROUND | DISCL_NONEXCLUSIVE)))
-            return false;
-
-        g_pKeyboard->Acquire();
-        return true;
+    bool InputManager::initRawInput(HWND hwnd) {
+        RAWINPUTDEVICE rid;
+        rid.usUsagePage = 0x01;  // Generic Desktop Controls
+        rid.usUsage = 0x06;      // Keyboard
+        rid.dwFlags = RIDEV_INPUTSINK;  // Receive input even when not in foreground
+        rid.hwndTarget = hwnd;
+        return RegisterRawInputDevices(&rid, 1, sizeof(rid));
     }
 
     bool InputManager::initializeEvents() {
@@ -138,17 +119,6 @@ namespace inputs {
         if (hSpamThreadHandle) {
             WaitForSingleObject(hSpamThreadHandle, 1000);
             CloseHandle(hSpamThreadHandle);
-        }
-
-        if (g_pKeyboard) {
-            g_pKeyboard->Unacquire();
-            g_pKeyboard->Release();
-            g_pKeyboard = nullptr;
-        }
-
-        if (g_pDI) {
-            g_pDI->Release();
-            g_pDI = nullptr;
         }
 
         if (hHook)
@@ -186,8 +156,7 @@ namespace inputs {
             }
         }
 
-        // Small delay to ensure key up is registered
-        Sleep(1);
+        Sleep(1);  // Small delay to ensure key up is registered
 
         // Then restore physically held keys
         for (int key : {'W', 'A', 'S', 'D'}) {
@@ -210,11 +179,34 @@ namespace inputs {
         bool isKeyUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
         bool isInjected = (pKeybd->flags & LLKHF_INJECTED);
 
-        if (keyCode == 'W' || keyCode == 'A' || keyCode == 'S' || keyCode == 'D') {
+        if (keyCode == Config::getInstance()->spamTriggerKey.load() && !isInjected) {
+            if (isKeyDown && !isCSpamActive) {
+                isCSpamActive = true;
+                {
+                    std::lock_guard<std::mutex> lock(spamKeysMutex);
+                    activeSpamKeys.clear();
+                    for (int key : {'W', 'A', 'S', 'D'}) {
+                        auto it = keyInfo.find(key);
+                        if (it != keyInfo.end() && it->second->physicalKeyDown) {
+                            activeSpamKeys.push_back(key);
+                            it->second->spamActive = true;
+                        }
+                    }
+                }
+                SetEvent(hSpamEvent);
+            }
+            else if (isKeyUp && isCSpamActive) {
+                isCSpamActive = false;
+                restoreKeyStates();
+                SetEvent(hSpamEvent);
+            }
+            return 1;
+        }
+
+        if ((keyCode == 'W' || keyCode == 'A' || keyCode == 'S' || keyCode == 'D') && !isInjected) {
             auto it = keyInfo.find(keyCode);
-            if (it != keyInfo.end() && !isInjected) {
+            if (it != keyInfo.end()) {
                 it->second->physicalKeyDown = isKeyDown;
-                it->second->lastStateChange = std::chrono::steady_clock::now();
 
                 if (isCSpamActive) {
                     std::lock_guard<std::mutex> lock(spamKeysMutex);
@@ -229,39 +221,13 @@ namespace inputs {
                         if (iter != activeSpamKeys.end()) {
                             activeSpamKeys.erase(iter);
                             it->second->spamActive = false;
-                            // Ensure key is released
                             sendGameInput(keyCode, false);
-                            Sleep(1); // Small delay for stability
+                            Sleep(1);
                         }
                     }
                     SetEvent(hSpamEvent);
                     return 1;
                 }
-            }
-        }
-
-        if (keyCode == Config::getInstance()->spamTriggerKey.load() && !isInjected) {
-            if (isKeyDown && !isCSpamActive) {
-                isCSpamActive = true;
-                {
-                    std::lock_guard<std::mutex> lock(spamKeysMutex);
-                    activeSpamKeys.clear();
-                    // Only add currently held keys
-                    for (int key : {'W', 'A', 'S', 'D'}) {
-                        auto it = keyInfo.find(key);
-                        if (it != keyInfo.end() && it->second->physicalKeyDown) {
-                            activeSpamKeys.push_back(key);
-                            it->second->spamActive = true;
-                        }
-                    }
-                }
-                SetEvent(hSpamEvent);
-            }
-            else if (isKeyUp && isCSpamActive) {
-                isCSpamActive = false;
-                // Force state restoration
-                restoreKeyStates();
-                SetEvent(hSpamEvent);
             }
         }
 
@@ -272,7 +238,6 @@ namespace inputs {
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
         SetThreadAffinityMask(GetCurrentThread(), 1);
 
-        std::vector<int> keysToSpam;
         HANDLE events[2] = { hSpamEvent, hTerminateEvent };
 
         while (true) {
@@ -306,7 +271,7 @@ namespace inputs {
                         if (it != keyInfo.end() &&
                             it->second->spamActive &&
                             it->second->physicalKeyDown &&
-                            isCSpamActive) { // Additional check
+                            isCSpamActive) {
                             sendGameInput(key, true);
                         }
                     }

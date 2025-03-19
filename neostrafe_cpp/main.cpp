@@ -316,10 +316,11 @@ int main() {
         return 1;
     }
 
-    if (!inputManager->initDirectInput(hwnd)) {
+    if (!inputManager->initRawInput(hwnd)) {
         if (Config::getInstance()->showConsole.load()) {
-            std::cout << "DirectInput initialization failed. Some games may not work properly.\n";
+        std::cout << "Raw Input initialization failed. Some games may not work properly.\n";
         }
+            
     }
 
     InitNotifyIconData(hwnd);
@@ -348,7 +349,7 @@ int main() {
         std::cout << "Target FPS: " << Config::getInstance()->targetFPS.load() << "\n";
         std::cout << "Trigger Key: " << static_cast<char>(Config::getInstance()->spamTriggerKey.load()) << "\n\n";
         std::cout << "Game Compatibility Mode: Enabled\n";
-        std::cout << "DirectInput Status: Active\n";
+        std::cout << "Raw Input Status: Active\n";
         std::cout << "Process Priority: High\n\n";
         std::cout << "Controls:\n";
         std::cout << "- Right-click tray icon for menu\n";
