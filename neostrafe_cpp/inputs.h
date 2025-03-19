@@ -177,17 +177,23 @@ namespace inputs {
     void InputManager::restoreKeyStates() {
         std::lock_guard<std::mutex> lock(spamKeysMutex);
 
+        // First release all active spam keys
         for (int key : activeSpamKeys) {
             sendGameInput(key, false);
-        }
-
-        for (int key : activeSpamKeys) {
             auto it = keyInfo.find(key);
             if (it != keyInfo.end()) {
                 it->second->spamActive = false;
-                if (it->second->physicalKeyDown) {
-                    sendGameInput(key, true);
-                }
+            }
+        }
+
+        // Small delay to ensure key up is registered
+        Sleep(1);
+
+        // Then restore physically held keys
+        for (int key : {'W', 'A', 'S', 'D'}) {
+            auto it = keyInfo.find(key);
+            if (it != keyInfo.end() && it->second->physicalKeyDown) {
+                sendGameInput(key, true);
             }
         }
 
@@ -208,6 +214,7 @@ namespace inputs {
             auto it = keyInfo.find(keyCode);
             if (it != keyInfo.end() && !isInjected) {
                 it->second->physicalKeyDown = isKeyDown;
+                it->second->lastStateChange = std::chrono::steady_clock::now();
 
                 if (isCSpamActive) {
                     std::lock_guard<std::mutex> lock(spamKeysMutex);
@@ -222,8 +229,9 @@ namespace inputs {
                         if (iter != activeSpamKeys.end()) {
                             activeSpamKeys.erase(iter);
                             it->second->spamActive = false;
+                            // Ensure key is released
                             sendGameInput(keyCode, false);
-                            Sleep(1);
+                            Sleep(1); // Small delay for stability
                         }
                     }
                     SetEvent(hSpamEvent);
@@ -238,7 +246,8 @@ namespace inputs {
                 {
                     std::lock_guard<std::mutex> lock(spamKeysMutex);
                     activeSpamKeys.clear();
-                    for (int key : { 'W', 'A', 'S', 'D' }) {
+                    // Only add currently held keys
+                    for (int key : {'W', 'A', 'S', 'D'}) {
                         auto it = keyInfo.find(key);
                         if (it != keyInfo.end() && it->second->physicalKeyDown) {
                             activeSpamKeys.push_back(key);
@@ -250,6 +259,7 @@ namespace inputs {
             }
             else if (isKeyUp && isCSpamActive) {
                 isCSpamActive = false;
+                // Force state restoration
                 restoreKeyStates();
                 SetEvent(hSpamEvent);
             }
@@ -273,12 +283,14 @@ namespace inputs {
                 break;
 
             if (Config::getInstance()->isWASDStrafingEnabled.load() && isCSpamActive) {
+                std::vector<int> keysToSpam;
                 {
                     std::lock_guard<std::mutex> lock(spamKeysMutex);
                     keysToSpam = activeSpamKeys;
                 }
 
                 if (!keysToSpam.empty()) {
+                    // Release phase
                     for (int key : keysToSpam) {
                         auto it = keyInfo.find(key);
                         if (it != keyInfo.end() && it->second->spamActive) {
@@ -288,11 +300,13 @@ namespace inputs {
 
                     Sleep(Config::getInstance()->spamKeyDownDuration.load());
 
+                    // Press phase - verify keys are still valid
                     for (int key : keysToSpam) {
                         auto it = keyInfo.find(key);
                         if (it != keyInfo.end() &&
                             it->second->spamActive &&
-                            it->second->physicalKeyDown) {
+                            it->second->physicalKeyDown &&
+                            isCSpamActive) { // Additional check
                             sendGameInput(key, true);
                         }
                     }
