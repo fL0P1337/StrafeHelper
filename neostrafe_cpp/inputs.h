@@ -13,6 +13,77 @@
 #pragma comment(lib, "dxguid.lib")
 
 namespace inputs {
+    LRESULT InputManager::processKeyboardInput(int nCode, WPARAM wParam, LPARAM lParam) {
+        if (nCode < 0)
+            return CallNextHookEx(hHook, nCode, wParam, lParam);
+
+        KBDLLHOOKSTRUCT* pKeybd = (KBDLLHOOKSTRUCT*)lParam;
+        int keyCode = pKeybd->vkCode;
+        bool isKeyDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
+        bool isKeyUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
+        bool isInjected = (pKeybd->flags & LLKHF_INJECTED);
+
+        if (keyCode == 'W' || keyCode == 'A' || keyCode == 'S' || keyCode == 'D') {
+            auto it = keyInfo.find(keyCode);
+            if (it != keyInfo.end() && !isInjected) {
+                it->second->physicalKeyDown = isKeyDown;
+
+                if (isCSpamActive) {
+                    std::lock_guard<std::mutex> lock(spamKeysMutex);
+                    if (isKeyDown) {
+                        if (!it->second->spamActive) {
+                            activeSpamKeys.push_back(keyCode);
+                            it->second->spamActive = true;
+                        }
+                    }
+                    else { // key up
+                        if (it->second->spamActive) {
+                            // Remove key using swap-and-pop for faster removal
+                            for (auto iter = activeSpamKeys.begin(); iter != activeSpamKeys.end(); ++iter) {
+                                if (*iter == keyCode) {
+                                    *iter = activeSpamKeys.back();
+                                    activeSpamKeys.pop_back();
+                                    break;
+                                }
+                            }
+                            it->second->spamActive = false;
+                            sendGameInput(keyCode, false);
+                        }
+                    }
+                    SetEvent(hSpamEvent);
+                    return 1;
+                }
+            }
+        }
+
+        // existing processing for other keys or triggers
+        // ...
+
+        if (keyCode == Config::getInstance()->spamTriggerKey.load() && !isInjected) {
+            if (isKeyDown && !isCSpamActive) {
+                isCSpamActive = true;
+                {
+                    std::lock_guard<std::mutex> lock(spamKeysMutex);
+                    activeSpamKeys.clear();
+                    for (int key : {'W', 'A', 'S', 'D'}) {
+                        auto keyState = keyInfo.find(key);
+                        if (keyState != keyInfo.end() && keyState->second->physicalKeyDown) {
+                            activeSpamKeys.push_back(key);
+                            keyState->second->spamActive = true;
+                        }
+                    }
+                }
+                SetEvent(hSpamEvent);
+            }
+            else if (isKeyUp && isCSpamActive) {
+                isCSpamActive = false;
+                restoreKeyStates();
+                SetEvent(hSpamEvent);
+            }
+        }
+
+        return CallNextHookEx(hHook, nCode, wParam, lParam);
+    }
     // Forward declarations
     class InputManager;
     static LRESULT CALLBACK KeyboardProcImpl(int nCode, WPARAM wParam, LPARAM lParam);
