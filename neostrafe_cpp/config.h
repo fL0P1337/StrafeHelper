@@ -5,8 +5,8 @@
 #include <fstream>
 #include <ctime>
 #include <windows.h>
-#include <iomanip>  // Added for std::setprecision
-#include <sstream>  // Added for stringstream
+#include <iomanip>
+#include <sstream>
 
 class Config {
 private:
@@ -26,7 +26,7 @@ private:
         isWASDStrafingEnabled.store(true);
         spamTriggerKey.store('C');
         showConsole.store(true);
-        startWithWindows.store(false);
+        // Removed: startWithWindows
         minimizeToTray.store(true);
         isSuperGlideEnabled.store(false);
         targetFPS.store(144);
@@ -43,7 +43,7 @@ public:
     std::atomic<bool> isWASDStrafingEnabled;
     std::atomic<int> spamTriggerKey;
     std::atomic<bool> showConsole;
-    std::atomic<bool> startWithWindows;
+    // Removed: startWithWindows
     std::atomic<bool> minimizeToTray;
     std::atomic<bool> isSuperGlideEnabled;
     std::atomic<int> targetFPS;
@@ -74,23 +74,19 @@ public:
             if (showConsole.load()) {
                 std::cout << "Creating new configuration file...\n";
             }
-            save(); // Create default config
+            save();
             return false;
         }
 
         std::string line;
         while (std::getline(file, line)) {
             if (line.empty() || line[0] == '#') continue;
-
             size_t pos = line.find('=');
             if (pos == std::string::npos) continue;
-
             std::string key = line.substr(0, pos);
             std::string value = line.substr(pos + 1);
-
             key.erase(remove_if(key.begin(), key.end(), isspace), key.end());
             value.erase(remove_if(value.begin(), value.end(), isspace), value.end());
-
             try {
                 if (key == "SPAM_DELAY_MS")
                     spamDelayMs.store(std::stoi(value));
@@ -112,8 +108,6 @@ public:
                 }
                 else if (key == "SHOW_CONSOLE")
                     showConsole.store(value == "true" || value == "1");
-                else if (key == "START_WITH_WINDOWS")
-                    startWithWindows.store(value == "true" || value == "1");
                 else if (key == "MINIMIZE_TO_TRAY")
                     minimizeToTray.store(value == "true" || value == "1");
                 else if (key == "SUPERGLIDE_ENABLED")
@@ -124,6 +118,7 @@ public:
                     superGlideJumpDelay.store(std::stod(value));
                 else if (key == "SUPERGLIDE_CROUCH_DELAY")
                     superGlideCrouchDelay.store(std::stod(value));
+                // Removed: START_WITH_WINDOWS key
             }
             catch (const std::exception& e) {
                 if (showConsole.load()) {
@@ -144,69 +139,40 @@ public:
             }
             return false;
         }
-
-        // Use stringstream for number formatting
         std::stringstream ss;
-
         file << "# StrafeHelper Configuration\n";
         file << "# Last updated: " << lastSaveTime << " UTC\n";
         file << "# User: " << currentUser << "\n\n";
-
         file << "# Performance Settings\n";
         file << "SPAM_DELAY_MS=" << spamDelayMs.load() << "\n";
         file << "SPAM_KEY_DOWN_DURATION=" << spamKeyDownDuration.load() << "\n\n";
-
         file << "# Feature Settings\n";
         file << "WASD_STRAFING_ENABLED=" << (isWASDStrafingEnabled.load() ? "true" : "false") << "\n";
         file << "WASD_STRAFING_TRIGGER_KEY=" << wasdStrafingTriggerKey.load() << "\n";
         file << "SUPERGLIDE_TRIGGER_KEY=" << superGlideTriggerKey.load() << "\n\n";
-
         file << "# SuperGlide Settings\n";
         file << "SUPERGLIDE_ENABLED=" << (isSuperGlideEnabled.load() ? "true" : "false") << "\n";
         file << "TARGET_FPS=" << targetFPS.load() << "\n";
-
-        // Use stringstream for precise floating-point output
         ss << std::fixed << std::setprecision(5);
         ss << superGlideJumpDelay.load();
         file << "SUPERGLIDE_JUMP_DELAY=" << ss.str() << "\n";
-
-        ss.str("");  // Clear stringstream
+        ss.str("");
         ss << std::fixed << std::setprecision(5);
         ss << superGlideCrouchDelay.load();
         file << "SUPERGLIDE_CROUCH_DELAY=" << ss.str() << "\n\n";
-
         file << "# Application Settings\n";
         file << "SHOW_CONSOLE=" << (showConsole.load() ? "true" : "false") << "\n";
-        file << "START_WITH_WINDOWS=" << (startWithWindows.load() ? "true" : "false") << "\n";
         file << "MINIMIZE_TO_TRAY=" << (minimizeToTray.load() ? "true" : "false") << "\n";
-
+        // Removed: START_WITH_WINDOWS entry
         file.close();
         return true;
     }
 
-    void setStartWithWindows(bool enable) {
-        HKEY hKey;
-        LPCTSTR keyPath = TEXT("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-
-        if (RegOpenKeyEx(HKEY_CURRENT_USER, keyPath, 0, KEY_ALL_ACCESS, &hKey) == ERROR_SUCCESS) {
-            if (enable) {
-                char path[MAX_PATH];
-                GetModuleFileNameA(NULL, path, MAX_PATH);
-                RegSetValueExA(hKey, "StrafeHelper", 0, REG_SZ, (BYTE*)path, strlen(path) + 1);
-            }
-            else {
-                RegDeleteValueA(hKey, "StrafeHelper");
-            }
-            RegCloseKey(hKey);
-        }
-        startWithWindows.store(enable);
-        save();
-    }
+    // Removed: setStartWithWindows function
 
     double getFrameTime() const {
         return 1000.0 / targetFPS.load();
     }
 };
 
-// Initialize the singleton instance
 Config* Config::instance = nullptr;

@@ -10,20 +10,21 @@
 // Constants
 #define ID_TRAY_APP_ICON                1001
 #define ID_TRAY_EXIT_CONTEXT_MENU_ITEM  3000
-#define ID_TRAY_WASD_STRAFING          3002
-#define ID_TRAY_DELAY_1MS              3004
-#define ID_TRAY_DELAY_2MS              3005
-#define ID_TRAY_DELAY_5MS              3006
-#define ID_TRAY_STARTUP                3007
-#define ID_TRAY_CONSOLE                3008
-#define ID_TRAY_SAVE_CONFIG            3009
-#define ID_TRAY_RELOAD_CONFIG          3010
-#define ID_TRAY_ABOUT                  3011
-#define ID_TRAY_SUPERGLIDE             3012
-#define ID_TRAY_TARGET_FPS_144         3013
-#define ID_TRAY_TARGET_FPS_165         3014
-#define ID_TRAY_TARGET_FPS_240         3015
-#define WM_TRAYICON                    (WM_USER + 1)
+#define ID_TRAY_WASD_STRAFING           3002
+#define ID_TRAY_DELAY_1MS               3004
+#define ID_TRAY_DELAY_2MS               3005
+#define ID_TRAY_DELAY_5MS               3006
+// Removed: ID_TRAY_STARTUP
+#define ID_TRAY_CONSOLE                 3008
+#define ID_TRAY_SAVE_CONFIG             3009
+#define ID_TRAY_RELOAD_CONFIG           3010
+#define ID_TRAY_ABOUT                   3011
+#define ID_TRAY_SUPERGLIDE              3012
+#define ID_TRAY_TARGET_FPS_144          3013
+#define ID_TRAY_TARGET_FPS_165          3014
+#define ID_TRAY_TARGET_FPS_240          3015
+#define ID_TRAY_CUSTOMIZE_WASD_TRIGGER  3016  // New menu item constant
+#define WM_TRAYICON                     (WM_USER + 1)
 
 const char* APP_NAME = "StrafeHelper";
 const char* VERSION = "3.0_game_compatible";
@@ -71,8 +72,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         // Settings submenu
         AppendMenu(hSettingsMenu, MF_STRING | MF_POPUP, (UINT_PTR)hDelayMenu, TEXT("Spam Delay"));
         AppendMenu(hSettingsMenu, MF_STRING | MF_POPUP, (UINT_PTR)hFPSMenu, TEXT("Target FPS"));
-        AppendMenu(hSettingsMenu, MF_SEPARATOR, 0, NULL);
-        AppendMenu(hSettingsMenu, MF_STRING, ID_TRAY_STARTUP, TEXT("Start with Windows"));
+        AppendMenu(hSettingsMenu, MF_STRING, ID_TRAY_CUSTOMIZE_WASD_TRIGGER, TEXT("WASD Trigger Key"));
+        // Removed: Start with Windows menu item
         AppendMenu(hSettingsMenu, MF_STRING, ID_TRAY_CONSOLE, TEXT("Show Console"));
         AppendMenu(hSettingsMenu, MF_STRING, ID_TRAY_SAVE_CONFIG, TEXT("Save Configuration"));
         AppendMenu(hSettingsMenu, MF_STRING, ID_TRAY_RELOAD_CONFIG, TEXT("Reload Configuration"));
@@ -98,8 +99,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 Config::getInstance()->isWASDStrafingEnabled.load() ? MF_CHECKED : MF_UNCHECKED);
             CheckMenuItem(hMenu, ID_TRAY_SUPERGLIDE,
                 Config::getInstance()->isSuperGlideEnabled.load() ? MF_CHECKED : MF_UNCHECKED);
-            CheckMenuItem(hSettingsMenu, ID_TRAY_STARTUP,
-                Config::getInstance()->startWithWindows.load() ? MF_CHECKED : MF_UNCHECKED);
+            // Removed: CheckMenuItem for start with windows
+
             CheckMenuItem(hSettingsMenu, ID_TRAY_CONSOLE,
                 Config::getInstance()->showConsole.load() ? MF_CHECKED : MF_UNCHECKED);
 
@@ -133,6 +134,29 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             bool newState = !Config::getInstance()->isWASDStrafingEnabled.load();
             Config::getInstance()->isWASDStrafingEnabled.store(newState);
             Config::getInstance()->save();
+            break;
+        }
+
+        case ID_TRAY_CUSTOMIZE_WASD_TRIGGER: {
+            // Prompt the user to press a new trigger key
+            MessageBox(hwnd, TEXT("After clicking OK, press the new WASD trigger key."), TEXT("WASD Trigger Key"), MB_OK);
+            int newKey = 0;
+            // Wait for the key press; simple polling loop
+            while (true) {
+                Sleep(50);
+                for (int k = 0x01; k < 0xFF; k++) {
+                    if (GetAsyncKeyState(k) & 0x8000) {
+                        newKey = k;
+                        goto KeyFound;
+                    }
+                }
+            }
+        KeyFound:
+            Config::getInstance()->wasdStrafingTriggerKey.store(newKey);
+            Config::getInstance()->save();
+            if (Config::getInstance()->showConsole.load()) {
+                std::cout << "WASD Trigger key set to: " << static_cast<char>(newKey) << "\n";
+            }
             break;
         }
 
@@ -180,10 +204,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             Config::getInstance()->save();
             break;
 
-        case ID_TRAY_STARTUP:
-            Config::getInstance()->setStartWithWindows(
-                !Config::getInstance()->startWithWindows.load());
-            break;
+            // Removed: case ID_TRAY_STARTUP
 
         case ID_TRAY_CONSOLE: {
             bool newState = !Config::getInstance()->showConsole.load();
@@ -202,7 +223,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 std::cout << "- WASD Strafing: " << (Config::getInstance()->isWASDStrafingEnabled.load() ? "Enabled" : "Disabled") << "\n";
                 std::cout << "- SuperGlide: " << (Config::getInstance()->isSuperGlideEnabled.load() ? "Enabled" : "Disabled") << "\n";
                 std::cout << "- Target FPS: " << Config::getInstance()->targetFPS.load() << "\n";
-                std::cout << "- Trigger Key: " << static_cast<char>(Config::getInstance()->spamTriggerKey.load()) << "\n";
+                std::cout << "- Trigger Key: " << static_cast<char>(Config::getInstance()->wasdStrafingTriggerKey.load()) << "\n";
             }
             else {
                 FreeConsole();
@@ -318,9 +339,8 @@ int main() {
 
     if (!inputManager->initRawInput(hwnd)) {
         if (Config::getInstance()->showConsole.load()) {
-        std::cout << "Raw Input initialization failed. Some games may not work properly.\n";
+            std::cout << "Raw Input initialization failed. Some games may not work properly.\n";
         }
-            
     }
 
     InitNotifyIconData(hwnd);
@@ -347,7 +367,7 @@ int main() {
         std::cout << "WASD Strafing: " << (Config::getInstance()->isWASDStrafingEnabled.load() ? "Enabled" : "Disabled") << "\n";
         std::cout << "SuperGlide: " << (Config::getInstance()->isSuperGlideEnabled.load() ? "Enabled" : "Disabled") << "\n";
         std::cout << "Target FPS: " << Config::getInstance()->targetFPS.load() << "\n";
-        std::cout << "Trigger Key: " << static_cast<char>(Config::getInstance()->spamTriggerKey.load()) << "\n\n";
+        std::cout << "Trigger Key: " << static_cast<char>(Config::getInstance()->wasdStrafingTriggerKey.load()) << "\n";
         std::cout << "Game Compatibility Mode: Enabled\n";
         std::cout << "Raw Input Status: Active\n";
         std::cout << "Process Priority: High\n\n";
@@ -355,7 +375,7 @@ int main() {
         std::cout << "- Right-click tray icon for menu\n";
         std::cout << "- Hold C + WASD for enhanced strafing\n";
         std::cout << "- SuperGlide with configurable FPS settings\n";
-        std::cout << "- ESC to exit\n\n";
+        std::cout << "- END to exit\n\n";
     }
 
     MSG msg;
@@ -363,7 +383,7 @@ int main() {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
 
-        if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
+        if (GetAsyncKeyState(VK_END) & 0x8000) {
             break;
         }
     }
