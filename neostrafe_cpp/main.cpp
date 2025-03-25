@@ -171,129 +171,164 @@ int main() {
 }
 
 // Keyboard hook procedure
+// Add this helper function at the top with other declarations
+void UpdateKeyState(int keyCode, bool isDown) {
+    if (isDown) {
+        SendKey(keyCode, true);
+    }
+    else {
+        SendKey(keyCode, false);
+    }
+}
+
+// Modified KeyboardProc function focusing on the key handling parts
 LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0) {
         KBDLLHOOKSTRUCT* pKeybd = (KBDLLHOOKSTRUCT*)lParam;
         int keyCode = pKeybd->vkCode;
+        bool isInjected = (pKeybd->flags & LLKHF_INJECTED);
 
-        // Update physical state for WASD keys
-        if (keyCode == 'W' || keyCode == 'A' || keyCode == 'S' || keyCode == 'D') {
-            if (wParam == WM_KEYDOWN) {
-                KeyInfo[keyCode].physicalKeyDown = true;
+        // Handle WASD keys
+        if (!isInjected && (keyCode == 'W' || keyCode == 'A' || keyCode == 'S' || keyCode == 'D')) {
+            bool isKeyDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
+
+            // Update physical key state
+            KeyInfo[keyCode].physicalKeyDown = isKeyDown;
+
+            if (isCSpamActive) {
+                if (isKeyDown) {
+                    // Only add to spam if not already present
+                    if (std::find(activeSpamKeys.begin(), activeSpamKeys.end(), keyCode) == activeSpamKeys.end()) {
+                        activeSpamKeys.push_back(keyCode);
+                        KeyInfo[keyCode].spamActive = true;
+                        SetEvent(hSpamEvent);
+                    }
+                }
+                else {
+                    // Key up during spam mode
+                    auto it = std::find(activeSpamKeys.begin(), activeSpamKeys.end(), keyCode);
+                    if (it != activeSpamKeys.end()) {
+                        activeSpamKeys.erase(it);
+                        KeyInfo[keyCode].spamActive = false;
+                        // Ensure key is released
+                        SendKey(keyCode, false);
+                        SetEvent(hSpamEvent);
+                    }
+                }
+                return 1; // Block the original key event
             }
-            else if (wParam == WM_KEYUP) {
-                KeyInfo[keyCode].physicalKeyDown = false;
+            else {
+                // Normal key processing when not in spam mode
+                UpdateKeyState(keyCode, isKeyDown);
+                return CallNextHookEx(hHook, nCode, wParam, lParam);
             }
         }
 
-        // WASD Spam Logic using the custom spam trigger key
-        if (isWASDStrafingEnabled) {
-            if (keyCode == KEY_SPAM_TRIGGER) {
-                if (wParam == WM_KEYDOWN) {
+        // Handle spam trigger key (C)
+        if (isWASDStrafingEnabled && keyCode == KEY_SPAM_TRIGGER && !isInjected) {
+            if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
+                if (!isCSpamActive) {
                     isCSpamActive = true;
-                    // Check each WASD key and add to active list if physically down.
+                    activeSpamKeys.clear();
+
+                    // Add all currently held keys to spam
                     for (int key : { 'W', 'A', 'S', 'D' }) {
-                        if (KeyInfo[key].physicalKeyDown &&
-                            std::find(activeSpamKeys.begin(), activeSpamKeys.end(), key) == activeSpamKeys.end())
-                        {
+                        if (KeyInfo[key].physicalKeyDown) {
                             activeSpamKeys.push_back(key);
                             KeyInfo[key].spamActive = true;
                         }
                     }
-                    // Signal the spam thread that state has changed.
                     SetEvent(hSpamEvent);
                 }
-                else if (wParam == WM_KEYUP) {
+            }
+            else if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
+                if (isCSpamActive) {
                     isCSpamActive = false;
-                    // Ensure that any keys still active are explicitly released before clearing.
+
+                    // Store currently held keys
+                    std::vector<int> heldKeys;
+                    for (int key : { 'W', 'A', 'S', 'D' }) {
+                        if (KeyInfo[key].physicalKeyDown) {
+                            heldKeys.push_back(key);
+                        }
+                    }
+
+                    // Clear spam state
                     for (int key : activeSpamKeys) {
+                        KeyInfo[key].spamActive = false;
                         SendKey(key, false);
                     }
-                    // Clear all pressed physical key states for WASD upon unholding the trigger
-                    for (int key : { 'W', 'A', 'S', 'D' }) {
-                        KeyInfo[key].physicalKeyDown = false;
-                        KeyInfo[key].spamActive = false;
-                    }
                     activeSpamKeys.clear();
+
+                    Sleep(1); // Brief pause
+
+                    // Restore only physically held keys
+                    for (int key : heldKeys) {
+                        if (KeyInfo[key].physicalKeyDown) {
+                            SendKey(key, true);
+                        }
+                    }
                     SetEvent(hSpamEvent);
                 }
-                return CallNextHookEx(hHook, nCode, wParam, lParam);
             }
-
-            // Block physical messages for WASD keys if we're spamming and not locked.
-            if (!(pKeybd->flags & LLKHF_INJECTED) && !isLocked && isCSpamActive) {
-                if (keyCode == 'W' || keyCode == 'A' || keyCode == 'S' || keyCode == 'D') {
-                    if (wParam == WM_KEYDOWN) {
-                        if (std::find(activeSpamKeys.begin(), activeSpamKeys.end(), keyCode) == activeSpamKeys.end()) {
-                            activeSpamKeys.push_back(keyCode);
-                            KeyInfo[keyCode].spamActive = true;
-                            SetEvent(hSpamEvent);
-                        }
-                        return 1; // Block event
-                    }
-                    else if (wParam == WM_KEYUP) {
-                        auto it = std::find(activeSpamKeys.begin(), activeSpamKeys.end(), keyCode);
-                        if (it != activeSpamKeys.end()) {
-                            SendKey(keyCode, false);
-                            KeyInfo[keyCode].spamActive = false;
-                            activeSpamKeys.erase(it);
-                            SetEvent(hSpamEvent);
-                        }
-                        return 1; // Block event
-                    }
-                }
-            }
+            return CallNextHookEx(hHook, nCode, wParam, lParam);
         }
     }
     return CallNextHookEx(hHook, nCode, wParam, lParam);
 }
 
-// Spam thread: Sends grouped WASD key events for strafing.
+// Modified SpamThread to handle key combinations more reliably
 DWORD WINAPI SpamThread(LPVOID lpParam) {
-    INPUT inputs[16]; // Array to hold grouped INPUT records.
+    INPUT inputs[16];
     while (true) {
-        // Wait until state changes or timeout for next cycle.
         WaitForSingleObject(hSpamEvent, SPAM_DELAY_MS);
 
-        if (isWASDStrafingEnabled && !activeSpamKeys.empty() && isCSpamActive) {
-            // Capture the list of keys to spam at the start of the cycle
-            std::vector<int> keysToSpam;
-            for (int key : activeSpamKeys) {
-                if (KeyInfo[key].spamActive) {
-                    keysToSpam.push_back(key);
-                }
-            }
-            if (!keysToSpam.empty()) {
-                int count = 0;
-                // Build array of key-down events for the captured keys
-                for (int key : keysToSpam) {
-                    inputs[count].type = INPUT_KEYBOARD;
-                    inputs[count].ki.wVk = key;
-                    inputs[count].ki.wScan = MapVirtualKey(key, 0);
-                    inputs[count].ki.dwFlags = KEYEVENTF_SCANCODE;
-                    count++;
-                }
-                if (count > 0)
-                    SendInput(count, inputs, sizeof(INPUT));
+        if (isWASDStrafingEnabled && isCSpamActive && !activeSpamKeys.empty()) {
+            // Create local copy of active keys to avoid race conditions
+            std::vector<int> currentKeys = activeSpamKeys;
 
-                Sleep(SPAM_KEY_DOWN_DURATION);
+            // Release phase
+            int count = 0;
+            ZeroMemory(inputs, sizeof(inputs));
 
-                count = 0;
-                // Build array of key-up events for the same captured keys
-                for (int key : keysToSpam) {
+            for (int key : currentKeys) {
+                if (KeyInfo[key].physicalKeyDown && KeyInfo[key].spamActive) {
                     inputs[count].type = INPUT_KEYBOARD;
                     inputs[count].ki.wVk = key;
                     inputs[count].ki.wScan = MapVirtualKey(key, 0);
                     inputs[count].ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
                     count++;
                 }
-                if (count > 0)
-                    SendInput(count, inputs, sizeof(INPUT));
+            }
+            if (count > 0) {
+                SendInput(count, inputs, sizeof(INPUT));
+            }
+
+            Sleep(SPAM_KEY_DOWN_DURATION);
+
+            // Press phase
+            count = 0;
+            ZeroMemory(inputs, sizeof(inputs));
+
+            for (int key : currentKeys) {
+                if (KeyInfo[key].physicalKeyDown && KeyInfo[key].spamActive) {
+                    inputs[count].type = INPUT_KEYBOARD;
+                    inputs[count].ki.wVk = key;
+                    inputs[count].ki.wScan = MapVirtualKey(key, 0);
+                    inputs[count].ki.dwFlags = KEYEVENTF_SCANCODE;
+                    count++;
+                }
+            }
+            if (count > 0) {
+                SendInput(count, inputs, sizeof(INPUT));
             }
         }
     }
     return 0;
 }
+
+
+
 
 // Send a simulated key event.
 void SendKey(int targetKey, bool keyDown) {
