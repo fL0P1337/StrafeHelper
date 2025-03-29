@@ -130,11 +130,28 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="main.cpp" />
-  </ItemGroup>
-  <ItemGroup>
     <None Include="config.cfg" />
     <None Include="readme.md" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Application.h" />
+    <ClInclude Include="AppWindow.h" />
+    <ClInclude Include="Config.h" />
+    <ClInclude Include="Globals.h" />
+    <ClInclude Include="KeyboardHook.h" />
+    <ClInclude Include="SpamLogic.h" />
+    <ClInclude Include="TrayIcon.h" />
+    <ClInclude Include="Utils.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Application.cpp" />
+    <ClCompile Include="AppWindow.cpp" />
+    <ClCompile Include="Config.cpp" />
+    <ClCompile Include="KeyboardHook.cpp" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="SpamLogic.cpp" />
+    <ClCompile Include="TrayIcon.cpp" />
+    <ClCompile Include="Utils.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
