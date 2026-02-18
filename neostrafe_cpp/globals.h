@@ -60,6 +60,7 @@ namespace Globals {
 #define ID_TRAY_APP_ICON 1001
 #define ID_TRAY_EXIT_MENU_ITEM 3000
 #define ID_TRAY_TOGGLE_STRAFING_ITEM 3002
+#define ID_TRAY_TOGGLE_SNAPTAP_ITEM 3003
 // Remove the const UINT versions if you use #define
 // const UINT WM_TRAYICON = WM_APP + 1;
 // const UINT ID_TRAY_APP_ICON = 1001;

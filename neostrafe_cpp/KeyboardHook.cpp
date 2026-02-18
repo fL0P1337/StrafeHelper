@@ -9,6 +9,188 @@
 #include <iostream>
 #include <windows.h>      // <-- Add (needed for KBDLLHOOKSTRUCT etc)
 
+namespace {
+
+    inline bool IsWasdVk(int vk) {
+        return (vk == 'W' || vk == 'A' || vk == 'S' || vk == 'D');
+    }
+
+    inline bool IsAxisXKey(int vk) {
+        return (vk == 'A' || vk == 'D');
+    }
+
+    inline bool IsAxisYKey(int vk) {
+        return (vk == 'W' || vk == 'S');
+    }
+
+    // Per-axis SOCD / SnapTap state (last-pressed wins, revert LIFO).
+    // X axis: A <-> D
+    // Y axis: W <-> S
+    struct AxisState {
+        int activeKey = 0;
+        std::vector<int> physicallyHeld; // press order (LIFO last)
+    };
+
+    AxisState g_axisX;
+    AxisState g_axisY;
+
+    // Virtual keys currently held down by SnapTap (only when SnapTap enabled and spam inactive).
+    int g_virtualAxisX = 0;
+    int g_virtualAxisY = 0;
+
+    AxisState* AxisForVk(int vk) {
+        if (IsAxisXKey(vk)) return &g_axisX;
+        if (IsAxisYKey(vk)) return &g_axisY;
+        return nullptr;
+    }
+
+    bool AxisContains(const AxisState& axis, int vk) {
+        return (std::find(axis.physicallyHeld.begin(), axis.physicallyHeld.end(), vk) != axis.physicallyHeld.end());
+    }
+
+    // Returns true only for a real up->down transition (ignores autorepeat).
+    bool AxisOnKeyDown(AxisState& axis, int vk) {
+        if (!AxisContains(axis, vk)) {
+            axis.physicallyHeld.push_back(vk);
+            axis.activeKey = vk;
+            return true;
+        }
+        return false;
+    }
+
+    bool AxisOnKeyUp(AxisState& axis, int vk) {
+        auto it = std::find(axis.physicallyHeld.begin(), axis.physicallyHeld.end(), vk);
+        if (it == axis.physicallyHeld.end()) {
+            return false;
+        }
+
+        axis.physicallyHeld.erase(it);
+        axis.activeKey = axis.physicallyHeld.empty() ? 0 : axis.physicallyHeld.back();
+        return true;
+    }
+
+    void SendKeyDownImmediate(int vkCode) {
+        INPUT input = { INPUT_KEYBOARD };
+        input.ki.wVk = vkCode;
+        input.ki.wScan = MapVirtualKey(vkCode, MAPVK_VK_TO_VSC);
+        input.ki.dwFlags = KEYEVENTF_SCANCODE;
+        input.ki.dwExtraInfo = GetMessageExtraInfo();
+        SendInput(1, &input, sizeof(INPUT));
+    }
+
+    void SendKeyUpImmediate(int vkCode) {
+        INPUT input = { INPUT_KEYBOARD };
+        input.ki.wVk = vkCode;
+        input.ki.wScan = MapVirtualKey(vkCode, MAPVK_VK_TO_VSC);
+        input.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
+        input.ki.dwExtraInfo = GetMessageExtraInfo();
+        SendInput(1, &input, sizeof(INPUT));
+    }
+
+    void ApplyVirtualAxisState(int& currentVk, int desiredVk) {
+        if (currentVk == desiredVk) return;
+
+        if (currentVk != 0) {
+            SendKeyUpImmediate(currentVk);
+        }
+        if (desiredVk != 0) {
+            SendKeyDownImmediate(desiredVk);
+        }
+        currentVk = desiredVk;
+    }
+
+    void ReleaseSnapTapVirtualKeys() {
+        ApplyVirtualAxisState(g_virtualAxisX, 0);
+        ApplyVirtualAxisState(g_virtualAxisY, 0);
+    }
+
+    void ApplySnapTapOutput(bool spamActive) {
+        const int desiredX = spamActive ? 0 : g_axisX.activeKey;
+        const int desiredY = spamActive ? 0 : g_axisY.activeKey;
+
+        ApplyVirtualAxisState(g_virtualAxisX, desiredX);
+        ApplyVirtualAxisState(g_virtualAxisY, desiredY);
+    }
+
+    void SetSpamKeysInternal(const std::vector<int>& keys) {
+        for (int key : { 'W', 'A', 'S', 'D' }) {
+            Globals::g_KeyInfo[key].spamming.store(false, std::memory_order_relaxed);
+        }
+
+        for (int vk : keys) {
+            Globals::g_KeyInfo[vk].spamming.store(true, std::memory_order_relaxed);
+        }
+
+        EnterCriticalSection(&Globals::g_csActiveKeys);
+        Globals::g_activeSpamKeys = keys;
+        LeaveCriticalSection(&Globals::g_csActiveKeys);
+
+        if (Globals::g_hSpamEvent) {
+            SetEvent(Globals::g_hSpamEvent);
+        }
+    }
+
+    void UpdateSpamKeys(bool snapTapEnabled) {
+        std::vector<int> keys;
+        keys.reserve(2);
+
+        if (snapTapEnabled) {
+            if (g_axisX.activeKey != 0) keys.push_back(g_axisX.activeKey);
+            if (g_axisY.activeKey != 0) keys.push_back(g_axisY.activeKey);
+        }
+        else {
+            for (int key : { 'W', 'A', 'S', 'D' }) {
+                if (Globals::g_KeyInfo[key].physicalKeyDown.load(std::memory_order_relaxed)) {
+                    keys.push_back(key);
+                }
+            }
+        }
+
+        SetSpamKeysInternal(keys);
+    }
+
+    void SendKeyUpForPhysicallyHeldWasd() {
+        std::vector<INPUT> keyUpInputs;
+        keyUpInputs.reserve(4);
+
+        for (int key : { 'W', 'A', 'S', 'D' }) {
+            if (Globals::g_KeyInfo[key].physicalKeyDown.load(std::memory_order_relaxed)) {
+                INPUT input = { INPUT_KEYBOARD };
+                input.ki.wVk = key;
+                input.ki.wScan = MapVirtualKey(key, MAPVK_VK_TO_VSC);
+                input.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
+                input.ki.dwExtraInfo = GetMessageExtraInfo();
+                keyUpInputs.push_back(input);
+            }
+        }
+
+        if (!keyUpInputs.empty()) {
+            SendInput(static_cast<UINT>(keyUpInputs.size()), keyUpInputs.data(), sizeof(INPUT));
+        }
+    }
+
+    void SendKeyDownForPhysicallyHeldWasd() {
+        std::vector<INPUT> keyDownInputs;
+        keyDownInputs.reserve(4);
+
+        for (int key : { 'W', 'A', 'S', 'D' }) {
+            if (Globals::g_KeyInfo[key].physicalKeyDown.load(std::memory_order_relaxed)) {
+                INPUT input = { INPUT_KEYBOARD };
+                input.ki.wVk = key;
+                input.ki.wScan = MapVirtualKey(key, MAPVK_VK_TO_VSC);
+                input.ki.dwFlags = KEYEVENTF_SCANCODE;
+                input.ki.dwExtraInfo = GetMessageExtraInfo();
+                keyDownInputs.push_back(input);
+            }
+        }
+
+        if (!keyDownInputs.empty()) {
+            SendInput(static_cast<UINT>(keyDownInputs.size()), keyDownInputs.data(), sizeof(INPUT));
+        }
+    }
+
+} // namespace
+
 LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode != HC_ACTION) {
         return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam); // Globals::
@@ -23,125 +205,121 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
         return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam); // Globals::
     }
 
-    // --- Declare itKeyInfo *before* first use ---
     auto itKeyInfo = Globals::g_KeyInfo.find(vkCode); // Globals::
     bool isManagedKey = (itKeyInfo != Globals::g_KeyInfo.end()); // Globals::
-    // ---
 
-    bool isWASD = (vkCode == 'W' || vkCode == 'A' || vkCode == 'S' || vkCode == 'D');
-    int currentTriggerKey = Config::KeySpamTrigger.load(std::memory_order_relaxed);
-    bool isTrigger = (vkCode == currentTriggerKey);
+    const bool isWASD = IsWasdVk(vkCode);
+    const int currentTriggerKey = Config::KeySpamTrigger.load(std::memory_order_relaxed);
+    const bool isTrigger = (vkCode == currentTriggerKey);
 
     if (isManagedKey) {
-        // itKeyInfo is now initialized before this block
         itKeyInfo->second.physicalKeyDown.store(isKeyDown, std::memory_order_relaxed);
     }
 
-    if (isTrigger && Config::IsWASDStrafingEnabled.load(std::memory_order_relaxed)) {
+    const bool spamFeatureEnabled = Config::IsWASDStrafingEnabled.load(std::memory_order_relaxed);
+    const bool snapTapEnabled = Config::EnableSnapTap.load(std::memory_order_relaxed);
+    const bool spamActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) && spamFeatureEnabled;
+
+    // Trigger gates macro spamming ONLY. SnapTap ownership resolution runs independently.
+    if (isTrigger && spamFeatureEnabled) {
         if (isKeyDown) {
-            if (!Globals::g_isCSpamActive.load(std::memory_order_relaxed)) { // Globals::
-                Globals::g_isCSpamActive.store(true, std::memory_order_relaxed); // Globals::
+            if (!Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
+                Globals::g_isCSpamActive.store(true, std::memory_order_relaxed);
                 std::cout << "Spam Activated" << std::endl;
 
-                std::vector<int> keysToStartSpamming;
-                std::vector<INPUT> keyUpInputs;
+                // Ensure any held movement keys are virtually UP while spamming.
+                ApplySnapTapOutput(true);
+                SendKeyUpForPhysicallyHeldWasd();
 
-                for (int key : {'W', 'A', 'S', 'D'}) {
-                    // --- Re-add KeyState& declaration ---
-                    Globals::KeyState& keyStateRef = Globals::g_KeyInfo[key]; // Globals::
-                    // ---
-                    if (keyStateRef.physicalKeyDown.load(std::memory_order_relaxed)) { // Use variable
-                        keyStateRef.spamming.store(true, std::memory_order_relaxed); // Use variable
-                        keysToStartSpamming.push_back(key);
-
-                        INPUT input = { INPUT_KEYBOARD };
-                        input.ki.wVk = key;
-                        input.ki.wScan = MapVirtualKey(key, MAPVK_VK_TO_VSC);
-                        input.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
-                        input.ki.dwExtraInfo = GetMessageExtraInfo();
-                        keyUpInputs.push_back(input);
-                    }
-                    else {
-                        keyStateRef.spamming.store(false, std::memory_order_relaxed); // Use variable
-                    }
-                }
-
-                if (!keyUpInputs.empty()) {
-                    SendInput(static_cast<UINT>(keyUpInputs.size()), keyUpInputs.data(), sizeof(INPUT));
-                }
-
-                EnterCriticalSection(&Globals::g_csActiveKeys); // Globals::
-                Globals::g_activeSpamKeys = keysToStartSpamming; // Globals::
-                LeaveCriticalSection(&Globals::g_csActiveKeys); // Globals::
-
-                SetEvent(Globals::g_hSpamEvent); // Globals::
+                UpdateSpamKeys(snapTapEnabled);
             }
-            // return 1;
         }
         else if (isKeyUp) {
-            if (Globals::g_isCSpamActive.load(std::memory_order_relaxed)) { // Globals::
+            if (Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
                 std::cout << "Spam Deactivated" << std::endl;
-                CleanupSpamState(true);
+
+                if (snapTapEnabled) {
+                    CleanupSpamState(false);
+                    ApplySnapTapOutput(false);
+                }
+                else {
+                    CleanupSpamState(true);
+                }
             }
         }
-        return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam); // Globals::
+        return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam);
     }
 
-    if (isWASD && Config::IsWASDStrafingEnabled.load(std::memory_order_relaxed) && Globals::g_isCSpamActive.load(std::memory_order_relaxed)) { // Globals::
-        // --- Re-add KeyState& declaration ---
-        // itKeyInfo is already declared and found/not found checked above
-        if (!isManagedKey) return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam); // Should not happen if WASD check passes, but safer
-        Globals::KeyState& keyState = itKeyInfo->second; // Globals::
-        // ---
-
-        if (isKeyDown) {
-            if (!keyState.spamming.load(std::memory_order_relaxed)) { // Use variable
-                keyState.spamming.store(true, std::memory_order_relaxed); // Use variable
-
-                EnterCriticalSection(&Globals::g_csActiveKeys); // Globals::
-                // Use std::find correctly
-                if (std::find(Globals::g_activeSpamKeys.begin(), Globals::g_activeSpamKeys.end(), vkCode) == Globals::g_activeSpamKeys.end()) { // Globals::
-                    Globals::g_activeSpamKeys.push_back(vkCode); // Globals::
-                }
-                LeaveCriticalSection(&Globals::g_csActiveKeys); // Globals::
-
-                INPUT input = { INPUT_KEYBOARD };
-                input.ki.wVk = vkCode;
-                input.ki.wScan = MapVirtualKey(vkCode, MAPVK_VK_TO_VSC);
-                input.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
-                input.ki.dwExtraInfo = GetMessageExtraInfo();
-                SendInput(1, &input, sizeof(INPUT));
-
-                SetEvent(Globals::g_hSpamEvent); // Globals::
+    if (isWASD) {
+        AxisState* axis = AxisForVk(vkCode);
+        if (axis) {
+            if (isKeyDown) {
+                AxisOnKeyDown(*axis, vkCode);
             }
-            return 1;
+            else if (isKeyUp) {
+                AxisOnKeyUp(*axis, vkCode);
+            }
         }
-        else if (isKeyUp) {
-            if (keyState.spamming.load(std::memory_order_relaxed)) { // Use variable
-                keyState.spamming.store(false, std::memory_order_relaxed); // Use variable
 
-                EnterCriticalSection(&Globals::g_csActiveKeys); // Globals::
-                // Fix std::remove usage within erase-remove idiom
-                Globals::g_activeSpamKeys.erase( // Globals::
-                    std::remove(Globals::g_activeSpamKeys.begin(), Globals::g_activeSpamKeys.end(), vkCode), // <-- Fix arguments
-                    Globals::g_activeSpamKeys.end() // Globals::
-                );
-                LeaveCriticalSection(&Globals::g_csActiveKeys); // Globals::
+        if (spamActive) {
+            // Spam layer keeps movement keys virtually UP and spams the active key(s).
+            ApplySnapTapOutput(true);
+            SendKeyUpImmediate(vkCode);
+            UpdateSpamKeys(snapTapEnabled);
+            return 1; // swallow physical WASD while spamming
+        }
 
-                INPUT input = { INPUT_KEYBOARD };
-                input.ki.wVk = vkCode;
-                input.ki.wScan = MapVirtualKey(vkCode, MAPVK_VK_TO_VSC);
-                input.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
-                input.ki.dwExtraInfo = GetMessageExtraInfo();
-                SendInput(1, &input, sizeof(INPUT));
-
-                SetEvent(Globals::g_hSpamEvent); // Globals::
-            }
-            return 1;
+        if (snapTapEnabled) {
+            // SnapTap is always-on (even without trigger). It owns WASD output when enabled.
+            ApplySnapTapOutput(false);
+            return 1; // swallow physical WASD and emit sanitized output via SendInput
         }
     }
 
     return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam); // Globals::
+}
+
+void OnSnapTapToggled(bool enabled) {
+    const bool spamFeatureEnabled = Config::IsWASDStrafingEnabled.load(std::memory_order_relaxed);
+    const bool spamActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) && spamFeatureEnabled;
+
+    if (enabled) {
+        // Clear any physical holds currently down in the target app before SnapTap takes over.
+        if (!spamActive) {
+            SendKeyUpForPhysicallyHeldWasd();
+        }
+        ApplySnapTapOutput(spamActive);
+    }
+    else {
+        // Release any SnapTap-owned keys so we don't leave the target app in a stuck state.
+        ReleaseSnapTapVirtualKeys();
+
+        // Restore physical holds immediately (otherwise the user must re-press).
+        if (!spamActive) {
+            SendKeyDownForPhysicallyHeldWasd();
+        }
+    }
+
+    if (spamActive) {
+        UpdateSpamKeys(enabled);
+    }
+}
+
+void RefreshMovementState() {
+    const bool spamFeatureEnabled = Config::IsWASDStrafingEnabled.load(std::memory_order_relaxed);
+    const bool snapTapEnabled = Config::EnableSnapTap.load(std::memory_order_relaxed);
+    const bool spamActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) && spamFeatureEnabled;
+
+    if (snapTapEnabled) {
+        ApplySnapTapOutput(spamActive);
+    }
+    else {
+        ReleaseSnapTapVirtualKeys();
+    }
+
+    if (spamActive) {
+        UpdateSpamKeys(snapTapEnabled);
+    }
 }
 
 bool SetupKeyboardHook(HINSTANCE hInstance) {

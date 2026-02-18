@@ -5,52 +5,61 @@
 #include "Config.h"      // For APP_NAME, VERSION
 #include "Utils.h"       // For LogError
 #include <iostream>      // For console output
+#include <cstdio>        // For freopen_s, setvbuf
 #include <tchar.h>       // For SetConsoleTitle
 
-#ifdef _DEBUG
-void SetupDebugConsole() {
+static void SetupConsole() {
+    // If launched from an existing console, reuse it. Otherwise, always create one (even in Release builds).
     if (!GetConsoleWindow()) {
-        if (AllocConsole()) {
-            FILE* pCout, * pCerr, * pCin;
-            // Redirect standard streams
-            if (freopen_s(&pCout, "CONOUT$", "w", stdout) == 0 &&
-                freopen_s(&pCerr, "CONOUT$", "w", stderr) == 0 &&
-                freopen_s(&pCin, "CONIN$", "r", stdin) == 0)
-            {
-                // Clear error state flags potentially set by failed freopen_s
-                clearerr(stdout);
-                clearerr(stderr);
-                clearerr(stdin);
-
-                // Set console title using TCHAR
-                SetConsoleTitle(TEXT("StrafeHelper Debug Console"));
-
-                // Sync std::cout/cerr with C stdio after redirection (optional but good practice)
-                std::ios::sync_with_stdio(true);
-
-                std::cout << "Debug Console Allocated." << std::endl;
-            }
-            else {
-                // Handle freopen_s failure (e.g., log to debugger output)
-                OutputDebugStringA("ERROR: Failed to redirect standard streams to console.\n");
+        if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
+            if (!AllocConsole()) {
+                OutputDebugStringA("ERROR: AllocConsole() failed.\n");
+                return;
             }
         }
+    }
+
+    FILE* pCout = nullptr;
+    FILE* pCerr = nullptr;
+    FILE* pCin = nullptr;
+
+    // Redirect standard streams so std::cout/cerr work reliably.
+    if (freopen_s(&pCout, "CONOUT$", "w", stdout) == 0 &&
+        freopen_s(&pCerr, "CONOUT$", "w", stderr) == 0 &&
+        freopen_s(&pCin, "CONIN$", "r", stdin) == 0)
+    {
+        clearerr(stdout);
+        clearerr(stderr);
+        clearerr(stdin);
+
+        // Unbuffered output to make logs show immediately.
+        setvbuf(stdout, nullptr, _IONBF, 0);
+        setvbuf(stderr, nullptr, _IONBF, 0);
+
+        const std::string title = std::string(Config::APP_NAME) + " v" + Config::VERSION + " Console";
+        SetConsoleTitleA(title.c_str());
+        std::ios::sync_with_stdio(true);
+
+        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        CONSOLE_SCREEN_BUFFER_INFO csbi = {};
+        if (hOut != INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(hOut, &csbi)) {
+            const WORD oldAttr = csbi.wAttributes;
+            SetConsoleTextAttribute(hOut, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+            std::cout << "StrafeHelper console attached." << std::endl;
+            SetConsoleTextAttribute(hOut, oldAttr);
+        }
         else {
-            OutputDebugStringA("ERROR: AllocConsole() failed.\n");
+            std::cout << "StrafeHelper console attached." << std::endl;
         }
     }
     else {
-        std::cout << "Using existing console." << std::endl;
+        OutputDebugStringA("ERROR: Failed to redirect standard streams to console.\n");
     }
 }
-#endif // _DEBUG
 
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-
-#ifdef _DEBUG
-    SetupDebugConsole();
-#endif
+    SetupConsole();
 
     // Use Config constants for name/version
     std::cout << Config::APP_NAME << " v" << Config::VERSION << " starting..." << std::endl;
@@ -78,4 +87,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // Do not call CleanupApplication() here again.
 
     return (int)msg.wParam;
+}
+
+// Some build configs use /SUBSYSTEM:CONSOLE; provide main() so they link cleanly.
+int main() {
+    return WinMain(GetModuleHandle(nullptr), nullptr, GetCommandLineA(), SW_SHOWDEFAULT);
 }

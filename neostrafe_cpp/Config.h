@@ -20,9 +20,11 @@ namespace Config {
     extern std::atomic<int> SpamKeyDownDurationMs;
     extern std::atomic<bool> IsLocked; // Feature toggle
     extern std::atomic<bool> IsWASDStrafingEnabled; // Master switch
+    extern std::atomic<bool> EnableSnapTap; // SnapTap / SOCD filtering
     extern std::atomic<int> KeySpamTrigger; // VK Code
 
     // Function to load configuration
     void LoadConfig();
+    void SaveConfig();
 
 } // namespace Config
