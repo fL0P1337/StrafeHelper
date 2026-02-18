@@ -158,43 +158,35 @@ bool InterceptionBackend::PassThrough(const NEO_KEY_EVENT &event) noexcept {
 
 bool InterceptionBackend::InjectKey(uint16_t scanCode,
                                     uint16_t flags) noexcept {
-  if (!initialized_ || !context_) {
+  if (!initialized_) {
     return false;
   }
 
-  InterceptionKeyStroke stroke{};
-  stroke.code = scanCode;
-  stroke.state = 0;
-  stroke.information = NEO_SYNTHETIC_INFORMATION;
+  // Use SendInput instead of interception_send to prevent synthetic events
+  // from being re-captured by our own Interception filter (FILTER_KEY_ALL).
+  // SendInput enters the Windows input pipeline downstream of the Interception
+  // filter driver, so these events are never re-ingested.
+  INPUT input{};
+  input.type = INPUT_KEYBOARD;
+  input.ki.wScan = scanCode;
+  input.ki.dwFlags = KEYEVENTF_SCANCODE;
+
   if ((flags & NEO_KEY_BREAK) != 0u) {
-    stroke.state |= static_cast<uint16_t>(INTERCEPTION_KEY_UP);
+    input.ki.dwFlags |= KEYEVENTF_KEYUP;
   }
   if ((flags & NEO_KEY_E0) != 0u) {
-    stroke.state |= static_cast<uint16_t>(INTERCEPTION_KEY_E0);
+    input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
   }
-  if ((flags & NEO_KEY_E1) != 0u) {
-    stroke.state |= static_cast<uint16_t>(INTERCEPTION_KEY_E1);
+  // Note: E1 prefix (e.g. Pause/Break) is not supported by SendInput's
+  // KEYEVENTF flags. E1 keys are never used for WASD movement.
+
+  const UINT sent = SendInput(1, &input, sizeof(INPUT));
+  if (sent != 1) {
+    return false;
   }
 
-  if (SendOnDevice(lastKeyboardDevice_, stroke, true)) {
-    return true;
-  }
-
-  if (pendingDevice_ > 0 && pendingDevice_ != lastKeyboardDevice_ &&
-      SendOnDevice(pendingDevice_, stroke, true)) {
-    return true;
-  }
-
-  for (const InterceptionDevice device : keyboardDevices_) {
-    if (device == lastKeyboardDevice_ || device == pendingDevice_) {
-      continue;
-    }
-    if (SendOnDevice(device, stroke, true)) {
-      return true;
-    }
-  }
-
-  return false;
+  status_.eventsInjected = ClampAddLong(status_.eventsInjected, 1);
+  return true;
 }
 
 void InterceptionBackend::WaitForData(uint32_t timeoutMs) noexcept {
