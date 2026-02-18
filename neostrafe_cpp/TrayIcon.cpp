@@ -52,11 +52,11 @@ void ShowContextMenu(HWND hwnd) {
     HMENU hMenu = CreatePopupMenu();
     if (!hMenu) return;
 
-    UINT checkFlag = Config::IsWASDStrafingEnabled.load(std::memory_order_relaxed) ? MF_CHECKED : MF_UNCHECKED;
+    UINT checkFlag = Config::EnableSpam.load(std::memory_order_relaxed) ? MF_CHECKED : MF_UNCHECKED;
     UINT checkSnapTap = Config::EnableSnapTap.load(std::memory_order_relaxed) ? MF_CHECKED : MF_UNCHECKED;
     // Use #define or Globals:: prefix for IDs
-    AppendMenu(hMenu, MF_STRING | checkFlag, ID_TRAY_TOGGLE_STRAFING_ITEM, TEXT("Enable WASD Strafing"));
-    AppendMenu(hMenu, MF_STRING | checkSnapTap, ID_TRAY_TOGGLE_SNAPTAP_ITEM, TEXT("Enable SnapTap"));
+    AppendMenu(hMenu, MF_STRING | checkSnapTap, ID_TRAY_TOGGLE_SNAPTAP_ITEM, TEXT("Enable SnapTap (WASD strafing)"));
+    AppendMenu(hMenu, MF_STRING | checkFlag, ID_TRAY_TOGGLE_SPAM_ITEM, TEXT("Enable Spam Mode"));
     AppendMenu(hMenu, MF_SEPARATOR, 0, NULL);
     AppendMenu(hMenu, MF_STRING, ID_TRAY_EXIT_MENU_ITEM, TEXT("Exit"));
 
@@ -68,11 +68,11 @@ void ShowContextMenu(HWND hwnd) {
 
     // Use #define or Globals:: prefix for IDs
     switch (commandId) {
-    case ID_TRAY_TOGGLE_STRAFING_ITEM:
+    case ID_TRAY_TOGGLE_SPAM_ITEM:
     {
-        bool newState = !Config::IsWASDStrafingEnabled.load(std::memory_order_relaxed);
-        Config::IsWASDStrafingEnabled.store(newState, std::memory_order_relaxed);
-        std::cout << "WASD Strafing " << (newState ? "Enabled" : "Disabled") << std::endl;
+        bool newState = !Config::EnableSpam.load(std::memory_order_relaxed);
+        Config::EnableSpam.store(newState, std::memory_order_relaxed);
+        std::cout << "Spam Mode " << (newState ? "Enabled" : "Disabled") << std::endl;
         if (!newState) {
             CleanupSpamState(false);
             RefreshMovementState();

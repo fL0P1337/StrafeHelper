@@ -23,6 +23,7 @@ namespace Globals {
     // Need full types here since it's the definition
     std::map<int, KeyState> g_KeyInfo;
     std::vector<int> g_activeSpamKeys;
+    std::atomic<unsigned long long> g_spamKeysEpoch = 0;
     CRITICAL_SECTION g_csActiveKeys; // Initialized in InitializeApplication
     std::atomic<bool> g_isCSpamActive = false;
 

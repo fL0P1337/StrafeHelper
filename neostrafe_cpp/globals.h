@@ -50,6 +50,7 @@ namespace Globals {
 
     extern std::map<int, KeyState> g_KeyInfo;
     extern std::vector<int> g_activeSpamKeys;
+    extern std::atomic<unsigned long long> g_spamKeysEpoch;
     extern CRITICAL_SECTION g_csActiveKeys;
     extern std::atomic<bool> g_isCSpamActive;
 
@@ -59,13 +60,13 @@ namespace Globals {
 #define WM_TRAYICON (WM_APP + 1)
 #define ID_TRAY_APP_ICON 1001
 #define ID_TRAY_EXIT_MENU_ITEM 3000
-#define ID_TRAY_TOGGLE_STRAFING_ITEM 3002
+#define ID_TRAY_TOGGLE_SPAM_ITEM 3002
 #define ID_TRAY_TOGGLE_SNAPTAP_ITEM 3003
 // Remove the const UINT versions if you use #define
 // const UINT WM_TRAYICON = WM_APP + 1;
 // const UINT ID_TRAY_APP_ICON = 1001;
 // const UINT ID_TRAY_EXIT_MENU_ITEM = 3000;
-// const UINT ID_TRAY_TOGGLE_STRAFING_ITEM = 3002;
+// const UINT ID_TRAY_TOGGLE_SPAM_ITEM = 3002;
 
 
 } // namespace Globals

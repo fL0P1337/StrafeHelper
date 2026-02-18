@@ -12,6 +12,13 @@
 
 namespace {
     std::atomic<bool> g_stopSpamThreadRequest = false;
+
+    void GetSpamSnapshot(std::vector<int>& keys, unsigned long long& epoch) {
+        EnterCriticalSection(&Globals::g_csActiveKeys);
+        keys = Globals::g_activeSpamKeys;
+        epoch = Globals::g_spamKeysEpoch.load(std::memory_order_relaxed);
+        LeaveCriticalSection(&Globals::g_csActiveKeys);
+    }
 }
 
 DWORD WINAPI SpamThread(LPVOID lpParam) {
@@ -22,35 +29,34 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
         DWORD spamDelay = Config::SpamDelayMs.load(std::memory_order_relaxed);
         DWORD waitTimeout = INFINITE;
 
-        bool shouldBeActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) && // Globals::
-            Config::IsWASDStrafingEnabled.load(std::memory_order_relaxed);
+        bool shouldBeActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
+            Config::EnableSpam.load(std::memory_order_relaxed);
 
         if (shouldBeActive) {
-            EnterCriticalSection(&Globals::g_csActiveKeys); // Globals::
-            bool keysCurrentlyActive = !Globals::g_activeSpamKeys.empty(); // Globals::
-            LeaveCriticalSection(&Globals::g_csActiveKeys); // Globals::
+            unsigned long long ignoredEpoch = 0;
+            GetSpamSnapshot(localActiveKeys, ignoredEpoch);
+            const bool keysCurrentlyActive = !localActiveKeys.empty();
 
             if (keysCurrentlyActive) {
                 waitTimeout = spamDelay;
             }
         }
 
-        DWORD waitResult = WaitForSingleObject(Globals::g_hSpamEvent, waitTimeout); // Globals::
+        WaitForSingleObject(Globals::g_hSpamEvent, waitTimeout);
 
         if (g_stopSpamThreadRequest.load(std::memory_order_relaxed)) {
             break;
         }
 
-        shouldBeActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) && // Globals::
-            Config::IsWASDStrafingEnabled.load(std::memory_order_relaxed);
+        shouldBeActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
+            Config::EnableSpam.load(std::memory_order_relaxed);
 
         if (!shouldBeActive) {
             continue;
         }
 
-        EnterCriticalSection(&Globals::g_csActiveKeys); // Globals::
-        localActiveKeys = Globals::g_activeSpamKeys; // Globals::
-        LeaveCriticalSection(&Globals::g_csActiveKeys); // Globals::
+        unsigned long long epochBeforeUp = 0;
+        GetSpamSnapshot(localActiveKeys, epochBeforeUp);
 
         if (localActiveKeys.empty()) {
             continue;
@@ -66,19 +72,24 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
             }
         }
 
-        shouldBeActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) && // Globals::
-            Config::IsWASDStrafingEnabled.load(std::memory_order_relaxed);
+        shouldBeActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
+            Config::EnableSpam.load(std::memory_order_relaxed);
         if (!shouldBeActive) {
             continue;
         }
 
-        EnterCriticalSection(&Globals::g_csActiveKeys); // Globals::
-        localActiveKeys = Globals::g_activeSpamKeys; // Globals::
-        LeaveCriticalSection(&Globals::g_csActiveKeys); // Globals::
+        unsigned long long epochBeforeDown = 0;
+        GetSpamSnapshot(localActiveKeys, epochBeforeDown);
 
-        if (!localActiveKeys.empty()) {
-            SendKeyInputBatch(localActiveKeys, true);
+        if (localActiveKeys.empty()) {
+            continue;
         }
+
+        if (Globals::g_spamKeysEpoch.load(std::memory_order_relaxed) != epochBeforeDown) {
+            continue;
+        }
+
+        SendKeyInputBatch(localActiveKeys, true);
     }
 
     std::cout << "Spam thread exiting." << std::endl;
@@ -113,6 +124,7 @@ void CleanupSpamState(bool restoreHeldKeys) {
     EnterCriticalSection(&Globals::g_csActiveKeys); // Globals::
     keysThatWereSpamming = Globals::g_activeSpamKeys; // Globals::
     Globals::g_activeSpamKeys.clear(); // Globals::
+    Globals::g_spamKeysEpoch.fetch_add(1ULL, std::memory_order_relaxed);
     LeaveCriticalSection(&Globals::g_csActiveKeys); // Globals::
 
     for (int key : {'W', 'A', 'S', 'D'}) {

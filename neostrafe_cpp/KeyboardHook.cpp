@@ -112,25 +112,7 @@ namespace {
         ApplyVirtualAxisState(g_virtualAxisY, desiredY);
     }
 
-    void SetSpamKeysInternal(const std::vector<int>& keys) {
-        for (int key : { 'W', 'A', 'S', 'D' }) {
-            Globals::g_KeyInfo[key].spamming.store(false, std::memory_order_relaxed);
-        }
-
-        for (int vk : keys) {
-            Globals::g_KeyInfo[vk].spamming.store(true, std::memory_order_relaxed);
-        }
-
-        EnterCriticalSection(&Globals::g_csActiveKeys);
-        Globals::g_activeSpamKeys = keys;
-        LeaveCriticalSection(&Globals::g_csActiveKeys);
-
-        if (Globals::g_hSpamEvent) {
-            SetEvent(Globals::g_hSpamEvent);
-        }
-    }
-
-    void UpdateSpamKeys(bool snapTapEnabled) {
+    std::vector<int> BuildDesiredSpamKeys(bool snapTapEnabled) {
         std::vector<int> keys;
         keys.reserve(2);
 
@@ -146,7 +128,40 @@ namespace {
             }
         }
 
-        SetSpamKeysInternal(keys);
+        return keys;
+    }
+
+    void PublishSpamKeysFromState(bool snapTapEnabled) {
+        const std::vector<int> desiredKeys = BuildDesiredSpamKeys(snapTapEnabled);
+        std::vector<int> previousKeys;
+        bool changed = false;
+
+        EnterCriticalSection(&Globals::g_csActiveKeys);
+        previousKeys = Globals::g_activeSpamKeys;
+        if (previousKeys != desiredKeys) {
+            Globals::g_activeSpamKeys = desiredKeys;
+            Globals::g_spamKeysEpoch.fetch_add(1ULL, std::memory_order_relaxed);
+            changed = true;
+        }
+
+        for (int key : { 'W', 'A', 'S', 'D' }) {
+            Globals::g_KeyInfo[key].spamming.store(false, std::memory_order_relaxed);
+        }
+        for (int vk : desiredKeys) {
+            Globals::g_KeyInfo[vk].spamming.store(true, std::memory_order_relaxed);
+        }
+        LeaveCriticalSection(&Globals::g_csActiveKeys);
+
+        if (changed) {
+            for (int oldKey : previousKeys) {
+                if (std::find(desiredKeys.begin(), desiredKeys.end(), oldKey) == desiredKeys.end()) {
+                    SendKeyUpImmediate(oldKey);
+                }
+            }
+            if (Globals::g_hSpamEvent) {
+                SetEvent(Globals::g_hSpamEvent);
+            }
+        }
     }
 
     void SendKeyUpForPhysicallyHeldWasd() {
@@ -216,7 +231,7 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
         itKeyInfo->second.physicalKeyDown.store(isKeyDown, std::memory_order_relaxed);
     }
 
-    const bool spamFeatureEnabled = Config::IsWASDStrafingEnabled.load(std::memory_order_relaxed);
+    const bool spamFeatureEnabled = Config::EnableSpam.load(std::memory_order_relaxed);
     const bool snapTapEnabled = Config::EnableSnapTap.load(std::memory_order_relaxed);
     const bool spamActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) && spamFeatureEnabled;
 
@@ -231,7 +246,7 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
                 ApplySnapTapOutput(true);
                 SendKeyUpForPhysicallyHeldWasd();
 
-                UpdateSpamKeys(snapTapEnabled);
+                PublishSpamKeysFromState(snapTapEnabled);
             }
         }
         else if (isKeyUp) {
@@ -265,7 +280,7 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
             // Spam layer keeps movement keys virtually UP and spams the active key(s).
             ApplySnapTapOutput(true);
             SendKeyUpImmediate(vkCode);
-            UpdateSpamKeys(snapTapEnabled);
+            PublishSpamKeysFromState(snapTapEnabled);
             return 1; // swallow physical WASD while spamming
         }
 
@@ -280,7 +295,7 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
 }
 
 void OnSnapTapToggled(bool enabled) {
-    const bool spamFeatureEnabled = Config::IsWASDStrafingEnabled.load(std::memory_order_relaxed);
+    const bool spamFeatureEnabled = Config::EnableSpam.load(std::memory_order_relaxed);
     const bool spamActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) && spamFeatureEnabled;
 
     if (enabled) {
@@ -301,12 +316,12 @@ void OnSnapTapToggled(bool enabled) {
     }
 
     if (spamActive) {
-        UpdateSpamKeys(enabled);
+        PublishSpamKeysFromState(enabled);
     }
 }
 
 void RefreshMovementState() {
-    const bool spamFeatureEnabled = Config::IsWASDStrafingEnabled.load(std::memory_order_relaxed);
+    const bool spamFeatureEnabled = Config::EnableSpam.load(std::memory_order_relaxed);
     const bool snapTapEnabled = Config::EnableSnapTap.load(std::memory_order_relaxed);
     const bool spamActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) && spamFeatureEnabled;
 
@@ -318,7 +333,7 @@ void RefreshMovementState() {
     }
 
     if (spamActive) {
-        UpdateSpamKeys(snapTapEnabled);
+        PublishSpamKeysFromState(snapTapEnabled);
     }
 }
 

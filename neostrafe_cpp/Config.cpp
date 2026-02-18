@@ -22,7 +22,7 @@ namespace Config {
     std::atomic<int> SpamDelayMs = 10;
     std::atomic<int> SpamKeyDownDurationMs = 5;
     std::atomic<bool> IsLocked = false;
-    std::atomic<bool> IsWASDStrafingEnabled = true;
+    std::atomic<bool> EnableSpam = true;
     std::atomic<bool> EnableSnapTap = true;
     std::atomic<int> KeySpamTrigger = 'C'; // VK_KEY 'C'
 
@@ -35,7 +35,7 @@ namespace Config {
             std::cout << " Defaults: Delay=" << SpamDelayMs.load()
                 << "ms, Duration=" << SpamKeyDownDurationMs.load()
                 << "ms, Trigger=" << static_cast<char>(KeySpamTrigger.load())
-                << ", Enabled=" << (IsWASDStrafingEnabled.load() ? "true" : "false")
+                << ", Spam=" << (EnableSpam.load() ? "true" : "false")
                 << ", SnapTap=" << (EnableSnapTap.load() ? "true" : "false")
                 << std::endl;
             return;
@@ -44,6 +44,8 @@ namespace Config {
         std::cout << "Loading configuration from " << CONFIG_FILE_NAME << "..." << std::endl;
         std::string line;
         int lineNumber = 0;
+        bool hasEnableSpam = false;
+        bool legacyEnableSpam = EnableSpam.load(std::memory_order_relaxed);
         while (std::getline(configFile, line)) {
             lineNumber++;
             std::string trimmedLine;
@@ -76,8 +78,12 @@ namespace Config {
                     SpamKeyDownDurationMs = std::stoi(value);
                 else if (key == "isLocked")
                     IsLocked = (value == "true" || value == "1");
+                else if (key == "enable_spam") {
+                    EnableSpam = (value == "true" || value == "1");
+                    hasEnableSpam = true;
+                }
                 else if (key == "isWASDStrafingEnabled")
-                    IsWASDStrafingEnabled = (value == "true" || value == "1");
+                    legacyEnableSpam = (value == "true" || value == "1");
                 else if (key == "enable_snaptap")
                     EnableSnapTap = (value == "true" || value == "1");
                 else if (key == "KEY_SPAM_TRIGGER") {
@@ -99,11 +105,15 @@ namespace Config {
         }
         configFile.close();
 
+        if (!hasEnableSpam) {
+            EnableSpam.store(legacyEnableSpam, std::memory_order_relaxed);
+        }
+
         std::cout << " Configuration loaded:" << std::endl;
         std::cout << "  SPAM_DELAY_MS: " << SpamDelayMs.load() << std::endl;
         std::cout << "  SPAM_KEY_DOWN_DURATION: " << SpamKeyDownDurationMs.load() << std::endl;
         std::cout << "  isLocked: " << (IsLocked.load() ? "true" : "false") << std::endl;
-        std::cout << "  isWASDStrafingEnabled: " << (IsWASDStrafingEnabled.load() ? "true" : "false") << std::endl;
+        std::cout << "  enable_spam: " << (EnableSpam.load() ? "true" : "false") << std::endl;
         std::cout << "  enable_snaptap: " << (EnableSnapTap.load() ? "true" : "false") << std::endl;
         std::cout << "  KEY_SPAM_TRIGGER: " << static_cast<char>(KeySpamTrigger.load()) << " (VK: " << KeySpamTrigger.load() << ")" << std::endl;
     }
@@ -112,7 +122,7 @@ namespace Config {
         const std::string spamDelay = std::to_string(SpamDelayMs.load());
         const std::string spamDuration = std::to_string(SpamKeyDownDurationMs.load());
         const std::string isLockedStr = IsLocked.load() ? "true" : "false";
-        const std::string isStrafingStr = IsWASDStrafingEnabled.load() ? "true" : "false";
+        const std::string enableSpamStr = EnableSpam.load() ? "true" : "false";
         const std::string snapTapStr = EnableSnapTap.load() ? "true" : "false";
         const std::string triggerStr(1, static_cast<char>(KeySpamTrigger.load()));
 
@@ -131,7 +141,7 @@ namespace Config {
             { "SPAM_DELAY_MS", spamDelay, false },
             { "SPAM_KEY_DOWN_DURATION", spamDuration, false },
             { "isLocked", isLockedStr, false },
-            { "isWASDStrafingEnabled", isStrafingStr, false },
+            { "enable_spam", enableSpamStr, false },
             { "enable_snaptap", snapTapStr, false },
             { "KEY_SPAM_TRIGGER", triggerStr, false },
         };
@@ -157,6 +167,11 @@ namespace Config {
 
             std::string key = working.substr(0, eq);
             trim(key);
+
+            if (key == "isWASDStrafingEnabled") {
+                line = "# legacy key migrated to enable_spam";
+                continue;
+            }
 
             for (auto& e : entries) {
                 if (key == e.key) {
