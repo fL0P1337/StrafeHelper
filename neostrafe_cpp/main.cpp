@@ -7,8 +7,10 @@
 #include "imgui/imgui.h"
 #include <string>
 #include <windows.h>
+#include <dwmapi.h>
 
-// Global window handle for the main GUI
+#pragma comment(lib, "dwmapi.lib")
+
 HWND g_hwnd = NULL;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd,
@@ -16,29 +18,52 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd,
                                                              WPARAM wParam,
                                                              LPARAM lParam);
 
+static void EnableBorderlessResize(HWND hwnd) {
+  MARGINS margins = { -1, -1, -1, -1 };
+  DwmExtendFrameIntoClientArea(hwnd, &margins);
+  SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+               SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
+}
+
 LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam,
-                             LPARAM lParam) {
+                              LPARAM lParam) {
+  if (msg == WM_NCHITTEST) {
+    LRESULT hit = DefWindowProc(hwnd, msg, wParam, lParam);
+    if (hit == HTCLIENT) {
+      POINT pt = {LOWORD(lParam), HIWORD(lParam)};
+      ScreenToClient(hwnd, &pt);
+      RECT rc;
+      GetClientRect(hwnd, &rc);
+
+      const int resizeBorder = 6;
+      const int dragBorder = 30;
+
+      bool left = pt.x < resizeBorder;
+      bool right = pt.x >= rc.right - resizeBorder;
+      bool top = pt.y < resizeBorder;
+      bool bottom = pt.y >= rc.bottom - resizeBorder;
+
+      if (top && left) return HTTOPLEFT;
+      if (top && right) return HTTOPRIGHT;
+      if (bottom && left) return HTBOTTOMLEFT;
+      if (bottom && right) return HTBOTTOMRIGHT;
+      if (left) return HTLEFT;
+      if (right) return HTRIGHT;
+      if (top) return HTTOP;
+      if (bottom) return HTBOTTOM;
+
+      if (pt.y < dragBorder || pt.y > (rc.bottom - dragBorder))
+        return HTCAPTION;
+    }
+    return hit;
+  }
+
   if (Gui::GuiManager::GetInstance().WndProcHandler(hwnd, msg, wParam, lParam))
     return true;
 
   switch (msg) {
-  case WM_NCHITTEST: {
-    LRESULT hit = DefWindowProc(hwnd, msg, wParam, lParam);
-    if (hit == HTCLIENT && ImGui::GetCurrentContext() != nullptr) {
-      if (!ImGui::GetIO().WantCaptureMouse) {
-        POINT pt = {LOWORD(lParam), HIWORD(lParam)};
-        ScreenToClient(hwnd, &pt);
-        RECT rc;
-        GetClientRect(hwnd, &rc);
-        int border = 30; // 30px handles for top/bottom
-        if (pt.y < border || pt.y > (rc.bottom - border))
-          return HTCAPTION;
-      }
-    }
-    return hit;
-  }
   case WM_SYSCOMMAND:
-    if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
+    if ((wParam & 0xfff0) == SC_KEYMENU)
       return 0;
     break;
   case WM_DESTROY:
@@ -65,9 +90,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                    Config::APP_NAME + strlen(Config::APP_NAME)) +
       L" - Configuration";
 
-  // Create application window
-  g_hwnd = ::CreateWindowW(wc.lpszClassName, windowTitle.c_str(), WS_POPUP, 100,
-                           100, 800, 600, NULL, NULL, wc.hInstance, NULL);
+  // Create application window (WS_THICKFRAME required for native resize)
+  g_hwnd = ::CreateWindowW(wc.lpszClassName, windowTitle.c_str(),
+                           WS_POPUP | WS_THICKFRAME, 100,
+                           100, 420, 380, NULL, NULL, wc.hInstance, NULL);
+
+  EnableBorderlessResize(g_hwnd);
 
   // Initialize Direct3D and ImGui
   if (!Gui::GuiManager::GetInstance().Initialize(g_hwnd)) {

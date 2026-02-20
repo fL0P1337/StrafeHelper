@@ -17,10 +17,8 @@ public:
   bool Initialize(HWND hwnd);
   void Shutdown();
 
-  // Call this every frame in the main loop
   void Render();
 
-  // Used by WndProc to forward inputs to ImGui
   LRESULT WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 private:
@@ -34,14 +32,12 @@ private:
   void CreateRenderTarget();
   void CleanupRenderTarget();
 
-  // Panel rendering functions
-  void RenderMainMenuBar();
-  void RenderConfigPanel();
-  void RenderConsolePanel();
-  void RenderStateMonitor();
+  void RenderConfigContent();
+  void RenderConsoleContent();
+  void RenderStateContent();
+  void RenderTitleBar();
   void ApplyDarkTheme();
 
-  // DX11 State
   ID3D11Device *g_pd3dDevice = nullptr;
   ID3D11DeviceContext *g_pd3dDeviceContext = nullptr;
   IDXGISwapChain *g_pSwapChain = nullptr;
@@ -51,7 +47,6 @@ private:
   bool m_showConsole = true;
   bool m_showStateMonitor = true;
 
-  // Rebind state
   bool m_isRebinding = false;
 };
 
