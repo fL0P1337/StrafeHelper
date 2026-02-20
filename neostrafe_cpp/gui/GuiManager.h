@@ -1,11 +1,14 @@
 // gui/GuiManager.h
 #pragma once
 
+#include "../imgui/imgui.h"
 #include <d3d11.h>
 #include <string>
 #include <windows.h>
 
 namespace Gui {
+
+enum class TabSelection { CONFIG, STATE, CONSOLE };
 
 class GuiManager {
 public:
@@ -48,6 +51,12 @@ private:
   bool m_showStateMonitor = true;
 
   bool m_isRebinding = false;
+
+  ImFont *m_fontMedium = nullptr;
+  ImFont *m_fontSemiBold = nullptr;
+  ImFont *m_fontLogo = nullptr;
+
+  TabSelection m_currentTab = TabSelection::CONFIG;
 };
 
 } // namespace Gui

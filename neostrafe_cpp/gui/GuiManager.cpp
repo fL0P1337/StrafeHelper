@@ -3,6 +3,8 @@
 #include "../Config.h"
 #include "../Globals.h"
 #include "../Logger.h"
+#include "../catrine/byte.h"
+#include "../catrine/elements.h"
 #include "../imgui/backends/imgui_impl_dx11.h"
 #include "../imgui/backends/imgui_impl_win32.h"
 #include "../imgui/imgui.h"
@@ -29,6 +31,32 @@ bool GuiManager::Initialize(HWND hwnd) {
   ImGuiIO &io = ImGui::GetIO();
   (void)io;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+  // Load Fonts
+  ImFontConfig font_config;
+  font_config.PixelSnapH = false;
+  font_config.OversampleH = 5;
+  font_config.OversampleV = 5;
+  font_config.RasterizerMultiply = 1.2f;
+
+  static const ImWchar ranges[] = {
+      0x0020, 0x00FF, // Basic Latin + Latin Supplement
+      0x0400, 0x052F, // Cyrillic + Cyrillic Supplement
+      0x2DE0, 0x2DFF, // Cyrillic Extended-A
+      0xA640, 0xA69F, // Cyrillic Extended-B
+      0xE000, 0xE226, // icons
+      0,
+  };
+
+  font_config.GlyphRanges = ranges;
+
+  m_fontMedium = io.Fonts->AddFontFromMemoryTTF(
+      (void *)InterMedium, sizeof(InterMedium), 15.0f, &font_config, ranges);
+  m_fontSemiBold = io.Fonts->AddFontFromMemoryTTF((void *)InterSemiBold,
+                                                  sizeof(InterSemiBold), 17.0f,
+                                                  &font_config, ranges);
+  m_fontLogo = io.Fonts->AddFontFromMemoryTTF(
+      (void *)catrine_logo, sizeof(catrine_logo), 17.0f, &font_config, ranges);
 
   ApplyDarkTheme();
 
@@ -63,66 +91,6 @@ LRESULT GuiManager::WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam,
   return 0;
 }
 
-void GuiManager::RenderTitleBar() {
-  float titleBarHeight = 24.0f;
-  ImVec2 pos = ImGui::GetCursorScreenPos();
-  ImVec2 size(ImGui::GetWindowWidth(), titleBarHeight);
-
-  ImDrawList *drawList = ImGui::GetWindowDrawList();
-  drawList->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y),
-                          IM_COL32(25, 35, 55, 255));
-
-  ImGui::SetCursorPosY(3);
-  ImGui::SetCursorPosX(8);
-  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 0.9f));
-  ImGui::Text("StrafeHelper");
-  ImGui::PopStyleColor();
-
-  ImGui::SameLine(ImGui::GetWindowWidth() - 120);
-
-  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.3f, 0.5f, 1.0f));
-  ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                        ImVec4(0.15f, 0.25f, 0.4f, 1.0f));
-  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 2));
-
-  if (ImGui::SmallButton("File")) {
-    ImGui::OpenPopup("FileMenu");
-  }
-  ImGui::SameLine(0, 2);
-  if (ImGui::SmallButton("View")) {
-    ImGui::OpenPopup("ViewMenu");
-  }
-
-  ImGui::PopStyleVar();
-  ImGui::PopStyleColor(3);
-
-  if (ImGui::BeginPopup("FileMenu")) {
-    if (ImGui::MenuItem("Save Config")) {
-      Config::SaveConfig();
-      Logger::GetInstance().Log("Config saved manually.");
-    }
-    if (ImGui::MenuItem("Load Config")) {
-      Config::LoadConfig();
-      Logger::GetInstance().Log("Config loaded manually.");
-    }
-    ImGui::Separator();
-    if (ImGui::MenuItem("Exit")) {
-      PostMessage(m_hwnd, WM_CLOSE, 0, 0);
-    }
-    ImGui::EndPopup();
-  }
-
-  if (ImGui::BeginPopup("ViewMenu")) {
-    ImGui::Checkbox("Console", &m_showConsole);
-    ImGui::Checkbox("State Monitor", &m_showStateMonitor);
-    ImGui::EndPopup();
-  }
-
-  ImGui::SetCursorPosY(titleBarHeight);
-  ImGui::Dummy(ImVec2(0, 0));
-}
-
 void GuiManager::Render() {
   if (!g_pd3dDevice || !g_mainRenderTargetView)
     return;
@@ -135,67 +103,76 @@ void GuiManager::Render() {
   ImGui::SetNextWindowPos(viewport->WorkPos);
   ImGui::SetNextWindowSize(viewport->WorkSize);
 
-  ImGuiWindowFlags windowFlags =
-      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-      ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse |
-      ImGuiWindowFlags_NoSavedSettings |
-      ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoBackground;
+  ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDecoration |
+                                 ImGuiWindowFlags_NoSavedSettings |
+                                 ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 9.0f);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
 
-  ImGui::Begin("MainWindow", nullptr, windowFlags);
+  ImGui::Begin("StrafeHelper", nullptr, windowFlags);
   {
     ImGui::PopStyleVar(3);
+    auto draw = ImGui::GetWindowDrawList();
+    auto pos = ImGui::GetWindowPos();
+    auto size = ImGui::GetWindowSize();
 
-    RenderTitleBar();
+    draw->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + 51),
+                        ImColor(24, 24, 24), 9.0f, ImDrawCornerFlags_Top);
+    // MultiColorRounded is an extension, use standard AddRectFilledMultiColor
+    // with a clip rect
+    ImGui::PushClipRect(pos, ImVec2(pos.x + 55, pos.y + 51), true);
+    draw->AddRectFilledMultiColor(
+        pos, ImVec2(pos.x + 55, pos.y + 51), ImColor(1.0f, 1.0f, 1.0f, 0.00f),
+        ImColor(1.0f, 1.0f, 1.0f, 0.05f), ImColor(1.0f, 1.0f, 1.0f, 0.00f),
+        ImColor(1.0f, 1.0f, 1.0f, 0.05f));
+    ImGui::PopClipRect();
 
-    ImVec2 contentSize = ImGui::GetContentRegionAvail();
-    float consoleHeight = m_showConsole ? 100.0f : 0.0f;
-    float topRowHeight = contentSize.y - consoleHeight - 4;
+    ImGui::PushFont(m_fontLogo);
+    draw->AddText(ImVec2(pos.x + 25, pos.y + 17), ImColor(192, 203, 229), "A");
+    ImGui::PopFont();
 
-    ImGui::BeginChild("TopRow", ImVec2(contentSize.x, topRowHeight), false,
-                      ImGuiWindowFlags_NoScrollbar |
-                          ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PushFont(m_fontSemiBold);
+    draw->AddText(ImVec2(pos.x + 49, pos.y + 18), ImColor(192, 203, 229),
+                  "StrafeHelper");
+    ImGui::PopFont();
+
+    ImGui::SetCursorPos({160, 19});
+    ImGui::BeginGroup();
     {
-      ImGui::Columns(2, "TopColumns", false);
+      if (elements::tab("Config", m_currentTab == TabSelection::CONFIG))
+        m_currentTab = TabSelection::CONFIG;
+      ImGui::SameLine();
+      if (elements::tab("Monitor", m_currentTab == TabSelection::STATE))
+        m_currentTab = TabSelection::STATE;
+      ImGui::SameLine();
+      if (elements::tab("Console", m_currentTab == TabSelection::CONSOLE))
+        m_currentTab = TabSelection::CONSOLE;
+    }
+    ImGui::EndGroup();
 
-      float configWidth =
-          m_showStateMonitor ? contentSize.x * 0.58f : contentSize.x;
-      ImGui::SetColumnWidth(0, configWidth);
+    ImGui::PushFont(m_fontMedium);
 
-      ImGui::BeginChild("ConfigSection", ImVec2(-1, -1), true,
-                        ImGuiWindowFlags_NoScrollbar |
-                            ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::SetCursorPos({15, 65});
+    ImGui::BeginChild("MainContent", ImVec2(size.x - 30, size.y - 80), false,
+                      ImGuiWindowFlags_NoScrollbar);
+
+    if (m_currentTab == TabSelection::CONFIG) {
       RenderConfigContent();
-      ImGui::EndChild();
-
-      if (m_showStateMonitor) {
-        ImGui::NextColumn();
-        ImGui::BeginChild("StateSection", ImVec2(-1, -1), true,
-                          ImGuiWindowFlags_NoScrollbar |
-                              ImGuiWindowFlags_NoScrollWithMouse);
-        RenderStateContent();
-        ImGui::EndChild();
-      }
-
-      ImGui::Columns(1);
-    }
-    ImGui::EndChild();
-
-    if (m_showConsole && consoleHeight > 0) {
-      ImGui::BeginChild("ConsoleSection", ImVec2(contentSize.x, consoleHeight),
-                        true);
+    } else if (m_currentTab == TabSelection::STATE) {
+      RenderStateContent();
+    } else if (m_currentTab == TabSelection::CONSOLE) {
       RenderConsoleContent();
-      ImGui::EndChild();
     }
+
+    ImGui::EndChild();
+    ImGui::PopFont();
   }
   ImGui::End();
 
   ImGui::Render();
-  const float clear_color_with_alpha[4] = {0.10f, 0.11f, 0.12f, 1.00f};
+  const float clear_color_with_alpha[4] = {0.00f, 0.00f, 0.00f, 1.00f};
   g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
   g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView,
                                              clear_color_with_alpha);
@@ -205,102 +182,100 @@ void GuiManager::Render() {
 }
 
 void GuiManager::RenderConfigContent() {
-  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 2));
-  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 4));
-  ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(4, 4));
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 4));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 8));
 
-  ImGui::Text("Features");
-  ImGui::SameLine(ImGui::GetWindowWidth() - 20);
-  ImGui::SetNextItemWidth(-1);
+  ImGui::TextDisabled("Features");
+  ImGui::Separator();
 
   bool useSpam = Config::EnableSpam.load();
-  if (ImGui::Checkbox("##spam", &useSpam)) {
+  if (ImGui::Checkbox("Enable Macro Spam", &useSpam)) {
     Config::EnableSpam.store(useSpam);
     Config::SaveConfig();
   }
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Enable Macro Spam");
 
-  ImGui::SameLine();
   bool useSnapTap = Config::EnableSnapTap.load();
-  if (ImGui::Checkbox("##snaptap", &useSnapTap)) {
+  if (ImGui::Checkbox("Enable SnapTap (SOCD)", &useSnapTap)) {
     Config::EnableSnapTap.store(useSnapTap);
     Config::SaveConfig();
   }
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Enable Snap-Tap (SOCD)");
 
   ImGui::Spacing();
-
-  ImGui::Text("Delay");
-  ImGui::SameLine(80);
-  ImGui::SetNextItemWidth(-8);
-  int delay = Config::SpamDelayMs.load();
-  if (ImGui::SliderInt("##delay", &delay, 1, 100, "%dms")) {
-    Config::SpamDelayMs.store(delay);
-  }
-
-  ImGui::Text("Duration");
-  ImGui::SameLine(80);
-  ImGui::SetNextItemWidth(-8);
-  int duration = Config::SpamKeyDownDurationMs.load();
-  if (ImGui::SliderInt("##duration", &duration, 0, 50, "%dms")) {
-    Config::SpamKeyDownDurationMs.store(duration);
-  }
-
-  ImGui::Spacing();
+  ImGui::TextDisabled("Delay Config");
   ImGui::Separator();
-  ImGui::Spacing();
 
-  ImGui::Text("Trigger");
-  ImGui::SameLine(80);
+  ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.5f);
+  int delay = Config::SpamDelayMs.load();
+  if (ImGui::SliderInt("Spam Delay", &delay, 1, 100, "%dms")) {
+    Config::SpamDelayMs.store(delay);
+    Config::SaveConfig();
+  }
+
+  ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.5f);
+  int duration = Config::SpamKeyDownDurationMs.load();
+  if (ImGui::SliderInt("Hold Duration", &duration, 0, 50, "%dms")) {
+    Config::SpamKeyDownDurationMs.store(duration);
+    Config::SaveConfig();
+  }
+
+  ImGui::Spacing();
+  ImGui::TextDisabled("Trigger Key");
+  ImGui::Separator();
+
   int currentTrigger = Config::KeySpamTrigger.load();
   if (m_isRebinding) {
-    ImGui::Button("...", ImVec2(50, 0));
-    for (int i = 8; i < 256; i++) {
-      if (ImGui::IsKeyPressed((ImGuiKey)i) || (GetAsyncKeyState(i) & 0x8000)) {
-        if (i != 'W' && i != 'A' && i != 'S' && i != 'D' && i != VK_ESCAPE) {
-          Config::KeySpamTrigger.store(i);
-          Config::SaveConfig();
-          Logger::GetInstance().Log("Rebound trigger to VK " +
-                                    std::to_string(i));
-        }
+    ImGui::Button("Press any key...", ImVec2(150, 0));
+    for (int i = 1; i < 256; i++) {
+      // Exclude left/right mouse and escape and WASD
+      if (i == VK_LBUTTON || i == VK_RBUTTON || i == VK_ESCAPE || i == 'W' ||
+          i == 'A' || i == 'S' || i == 'D')
+        continue;
+      if (GetAsyncKeyState(i) & 0x8000) {
+        Config::KeySpamTrigger.store(i);
+        Config::SaveConfig();
+        Logger::GetInstance().Log("Rebound trigger to VK " + std::to_string(i));
         m_isRebinding = false;
         break;
       }
     }
   } else {
-    std::string btnText = std::string(1, (char)currentTrigger);
-    if (ImGui::Button(btnText.c_str(), ImVec2(50, 0))) {
+    UINT scanCode = MapVirtualKeyA(currentTrigger, MAPVK_VK_TO_VSC);
+    char keyName[64] = "Unknown Key";
+    if (scanCode != 0) {
+      GetKeyNameTextA((scanCode << 16), keyName, sizeof(keyName));
+    } else {
+      sprintf_s(keyName, sizeof(keyName), "VK %d", currentTrigger);
+    }
+
+    if (ImGui::Button(keyName, ImVec2(150, 0))) {
       m_isRebinding = true;
     }
   }
 
-  ImGui::PopStyleVar(3);
+  ImGui::PopStyleVar(2);
 }
 
 void GuiManager::RenderConsoleContent() {
-  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 2));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 8));
 
-  ImGui::Text("Console");
-  ImGui::SameLine(ImGui::GetWindowWidth() - 45);
+  ImGui::TextDisabled("Application Logs");
+  ImGui::SameLine(ImGui::GetWindowWidth() - 55);
   if (ImGui::SmallButton("Clear")) {
     Logger::GetInstance().Clear();
   }
   ImGui::Separator();
 
-  ImGui::BeginChild("ScrollingRegion", ImVec2(0, 0), false,
-                    ImGuiWindowFlags_HorizontalScrollbar);
-
   auto logs = Logger::GetInstance().GetRecentLogs();
+  std::string fullLog;
   for (const auto &log : logs) {
-    ImGui::TextUnformatted(log.c_str());
+    fullLog += log + "\n";
   }
 
-  if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
-    ImGui::SetScrollHereY(1.0f);
+  ImVec2 avail = ImGui::GetContentRegionAvail();
+  ImGui::InputTextMultiline("##ConsoleOut", (char *)fullLog.c_str(),
+                            fullLog.size() + 1, avail,
+                            ImGuiInputTextFlags_ReadOnly);
 
-  ImGui::EndChild();
   ImGui::PopStyleVar();
 }
 

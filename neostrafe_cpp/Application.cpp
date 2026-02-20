@@ -5,7 +5,6 @@
 #include "Globals.h"
 #include "KeyboardHook.h"
 #include "SpamLogic.h"
-#include "TrayIcon.h"
 #include "Utils.h"
 #include <iostream>
 #include <map>    // <-- Add
@@ -27,8 +26,6 @@ std::vector<int> g_activeSpamKeys;
 std::atomic<unsigned long long> g_spamKeysEpoch{0};
 CRITICAL_SECTION g_csActiveKeys; // Initialized in InitializeApplication
 std::atomic<bool> g_isCSpamActive{false};
-
-NOTIFYICONDATA g_nid = {0};
 } // namespace Globals
 // --- End Global Variable Definitions ---
 
@@ -80,11 +77,8 @@ bool InitializeApplication(HINSTANCE hInstance) {
   }
   std::cout << "Key states initialized." << std::endl;
 
-  InitNotifyIconData(Globals::g_hWindow);
-
   Globals::g_hHookThread = CreateThread(NULL, 0, HookThreadFunc, NULL, 0, NULL);
   if (!Globals::g_hHookThread) {
-    RemoveTrayIcon();
     if (Globals::g_hWindow)
       DestroyWindow(Globals::g_hWindow);
     UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
@@ -101,7 +95,6 @@ bool InitializeApplication(HINSTANCE hInstance) {
     CloseHandle(Globals::g_hHookThread);
     Globals::g_hHookThread = NULL;
 
-    RemoveTrayIcon();
     if (Globals::g_hWindow)
       DestroyWindow(Globals::g_hWindow);
     UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
@@ -126,8 +119,6 @@ void CleanupApplication() {
     CloseHandle(Globals::g_hHookThread);
     Globals::g_hHookThread = NULL;
   }
-
-  RemoveTrayIcon();
 
   if (Globals::g_hInstance) {
     if (UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance)) {
