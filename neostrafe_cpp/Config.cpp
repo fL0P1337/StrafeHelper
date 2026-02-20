@@ -1,222 +1,244 @@
 // Config.cpp
 #include "Config.h"
-#include "Utils.h" // For LogError (or move LogError here?)
+#include "Logger.h"
 #include <fstream>
-#include <sstream>
-#include <iostream>
 #include <string>
 #include <vector>
-#include <stdexcept>
 #include <windows.h> // For VkKeyScanA
 
 namespace Config {
-    // --- Definitions of extern variables from Config.h ---
-    const char APP_NAME[] = "StrafeHelper";
-    const char VERSION[] = "1.2_modular"; // Updated version
-    const char CONFIG_FILE_NAME[] = "config.cfg";
+// --- Definitions of extern variables from Config.h ---
+const char APP_NAME[] = "StrafeHelper";
+const char VERSION[] = "1.2_modular"; // Updated version
+const char CONFIG_FILE_NAME[] = "config.cfg";
 
-    const TCHAR WINDOW_CLASS_NAME[] = TEXT("StrafeHelperWindowClass");
-    const TCHAR WINDOW_TITLE[] = TEXT("StrafeHelper Hidden Window");
+const TCHAR WINDOW_CLASS_NAME[] = TEXT("StrafeHelperWindowClass");
+const TCHAR WINDOW_TITLE[] = TEXT("StrafeHelper Hidden Window");
 
-    // Initialize atomics with defaults
-    std::atomic<int> SpamDelayMs = 10;
-    std::atomic<int> SpamKeyDownDurationMs = 5;
-    std::atomic<bool> IsLocked = false;
-    std::atomic<bool> EnableSpam = true;
-    std::atomic<bool> EnableSnapTap = true;
-    std::atomic<int> KeySpamTrigger = 'C'; // VK_KEY 'C'
+// Initialize atomics with defaults
+std::atomic<int> SpamDelayMs{10};
+std::atomic<int> SpamKeyDownDurationMs{5};
+std::atomic<bool> IsLocked{false};
+std::atomic<bool> EnableSpam{true};
+std::atomic<bool> EnableSnapTap{true};
+std::atomic<int> KeySpamTrigger{'C'}; // VK_KEY 'C'
 
-    // --- Implementation of LoadConfig ---
-    void LoadConfig() {
-        std::ifstream configFile(CONFIG_FILE_NAME);
-        if (!configFile.is_open()) {
-            std::cout << "Config file '" << CONFIG_FILE_NAME << "' not found. Using defaults." << std::endl;
-            // Print defaults being used
-            std::cout << " Defaults: Delay=" << SpamDelayMs.load()
-                << "ms, Duration=" << SpamKeyDownDurationMs.load()
-                << "ms, Trigger=" << static_cast<char>(KeySpamTrigger.load())
-                << ", Spam=" << (EnableSpam.load() ? "true" : "false")
-                << ", SnapTap=" << (EnableSnapTap.load() ? "true" : "false")
-                << std::endl;
-            return;
-        }
+// --- Implementation of LoadConfig ---
+void LoadConfig() {
+  std::ifstream configFile(CONFIG_FILE_NAME);
+  if (!configFile.is_open()) {
+    std::string logMsg = "Config file '" + std::string(CONFIG_FILE_NAME) +
+                         "' not found. Using defaults.\n";
+    logMsg += " Defaults: Delay=" + std::to_string(SpamDelayMs.load()) +
+              "ms, Duration=" + std::to_string(SpamKeyDownDurationMs.load()) +
+              "ms, Trigger=" + static_cast<char>(KeySpamTrigger.load()) +
+              ", Spam=" + (EnableSpam.load() ? "true" : "false") +
+              ", SnapTap=" + (EnableSnapTap.load() ? "true" : "false");
+    Logger::GetInstance().Log(logMsg);
+    return;
+  }
 
-        std::cout << "Loading configuration from " << CONFIG_FILE_NAME << "..." << std::endl;
-        std::string line;
-        int lineNumber = 0;
-        bool hasEnableSpam = false;
-        bool legacyEnableSpam = EnableSpam.load(std::memory_order_relaxed);
-        while (std::getline(configFile, line)) {
-            lineNumber++;
-            std::string trimmedLine;
-            size_t first = line.find_first_not_of(" \t\n\r\f\v");
-            if (first == std::string::npos || line[first] == '#') {
-                continue;
-            }
-            size_t last = line.find_last_not_of(" \t\n\r\f\v");
-            trimmedLine = line.substr(first, (last - first + 1));
+  Logger::GetInstance().Log("Loading configuration from " +
+                            std::string(CONFIG_FILE_NAME) + "...");
+  std::string line;
+  int lineNumber = 0;
+  bool hasEnableSpam = false;
+  bool legacyEnableSpam = EnableSpam.load(std::memory_order_relaxed);
+  while (std::getline(configFile, line)) {
+    lineNumber++;
+    std::string trimmedLine;
+    size_t first = line.find_first_not_of(" \t\n\r\f\v");
+    if (first == std::string::npos || line[first] == '#') {
+      continue;
+    }
+    size_t last = line.find_last_not_of(" \t\n\r\f\v");
+    trimmedLine = line.substr(first, (last - first + 1));
 
-            size_t equalsPos = trimmedLine.find('=');
-            if (equalsPos == std::string::npos) {
-                std::cerr << "Warning: Malformed line " << lineNumber << " in config: " << line << std::endl;
-                continue;
-            }
-
-            std::string key = trimmedLine.substr(0, equalsPos);
-            std::string value = trimmedLine.substr(equalsPos + 1);
-            // Trim key/value
-            size_t key_last = key.find_last_not_of(" \t\n\r\f\v");
-            if (key_last != std::string::npos) key = key.substr(0, key_last + 1);
-            size_t value_first = value.find_first_not_of(" \t\n\r\f\v");
-            if (value_first != std::string::npos) value = value.substr(value_first);
-
-
-            try {
-                if (key == "SPAM_DELAY_MS")
-                    SpamDelayMs = std::stoi(value);
-                else if (key == "SPAM_KEY_DOWN_DURATION")
-                    SpamKeyDownDurationMs = std::stoi(value);
-                else if (key == "isLocked")
-                    IsLocked = (value == "true" || value == "1");
-                else if (key == "enable_spam") {
-                    EnableSpam = (value == "true" || value == "1");
-                    hasEnableSpam = true;
-                }
-                else if (key == "isWASDStrafingEnabled")
-                    legacyEnableSpam = (value == "true" || value == "1");
-                else if (key == "enable_snaptap")
-                    EnableSnapTap = (value == "true" || value == "1");
-                else if (key == "KEY_SPAM_TRIGGER") {
-                    if (!value.empty()) {
-                        SHORT vkScanResult = VkKeyScanA(value[0]);
-                        if (vkScanResult != -1) {
-                            KeySpamTrigger = LOBYTE(vkScanResult);
-                        }
-                        else {
-                            KeySpamTrigger = static_cast<int>(toupper(value[0]));
-                            std::cerr << "Warning: Could not map config key '" << value[0] << "' via VkKeyScanA. Using direct char value." << std::endl;
-                        }
-                    }
-                }
-            }
-            catch (const std::exception& e) {
-                std::cerr << "Warning: Invalid config value on line " << lineNumber << " for key '" << key << "': " << value << " (" << e.what() << ")" << std::endl;
-            }
-        }
-        configFile.close();
-
-        if (!hasEnableSpam) {
-            EnableSpam.store(legacyEnableSpam, std::memory_order_relaxed);
-        }
-
-        std::cout << " Configuration loaded:" << std::endl;
-        std::cout << "  SPAM_DELAY_MS: " << SpamDelayMs.load() << std::endl;
-        std::cout << "  SPAM_KEY_DOWN_DURATION: " << SpamKeyDownDurationMs.load() << std::endl;
-        std::cout << "  isLocked: " << (IsLocked.load() ? "true" : "false") << std::endl;
-        std::cout << "  enable_spam: " << (EnableSpam.load() ? "true" : "false") << std::endl;
-        std::cout << "  enable_snaptap: " << (EnableSnapTap.load() ? "true" : "false") << std::endl;
-        std::cout << "  KEY_SPAM_TRIGGER: " << static_cast<char>(KeySpamTrigger.load()) << " (VK: " << KeySpamTrigger.load() << ")" << std::endl;
+    size_t equalsPos = trimmedLine.find('=');
+    if (equalsPos == std::string::npos) {
+      Logger::GetInstance().Log("Warning: Malformed line " +
+                                std::to_string(lineNumber) +
+                                " in config: " + line);
+      continue;
     }
 
-    void SaveConfig() {
-        const std::string spamDelay = std::to_string(SpamDelayMs.load());
-        const std::string spamDuration = std::to_string(SpamKeyDownDurationMs.load());
-        const std::string isLockedStr = IsLocked.load() ? "true" : "false";
-        const std::string enableSpamStr = EnableSpam.load() ? "true" : "false";
-        const std::string snapTapStr = EnableSnapTap.load() ? "true" : "false";
-        const std::string triggerStr(1, static_cast<char>(KeySpamTrigger.load()));
+    std::string key = trimmedLine.substr(0, equalsPos);
+    std::string value = trimmedLine.substr(equalsPos + 1);
+    // Trim key/value
+    size_t key_last = key.find_last_not_of(" \t\n\r\f\v");
+    if (key_last != std::string::npos)
+      key = key.substr(0, key_last + 1);
+    size_t value_first = value.find_first_not_of(" \t\n\r\f\v");
+    if (value_first != std::string::npos)
+      value = value.substr(value_first);
 
-        // Update-in-place: preserve unknown keys/comments, replace known keys, append missing ones.
-        std::vector<std::string> lines;
-        {
-            std::ifstream in(CONFIG_FILE_NAME);
-            std::string line;
-            while (std::getline(in, line)) {
-                lines.push_back(line);
-            }
+    try {
+      if (key == "SPAM_DELAY_MS")
+        SpamDelayMs = std::stoi(value);
+      else if (key == "SPAM_KEY_DOWN_DURATION")
+        SpamKeyDownDurationMs = std::stoi(value);
+      else if (key == "isLocked")
+        IsLocked = (value == "true" || value == "1");
+      else if (key == "enable_spam") {
+        EnableSpam = (value == "true" || value == "1");
+        hasEnableSpam = true;
+      } else if (key == "isWASDStrafingEnabled")
+        legacyEnableSpam = (value == "true" || value == "1");
+      else if (key == "enable_snaptap")
+        EnableSnapTap = (value == "true" || value == "1");
+      else if (key == "KEY_SPAM_TRIGGER") {
+        if (!value.empty()) {
+          SHORT vkScanResult = VkKeyScanA(value[0]);
+          if (vkScanResult != -1) {
+            KeySpamTrigger = LOBYTE(vkScanResult);
+          } else {
+            KeySpamTrigger = static_cast<int>(toupper(value[0]));
+            Logger::GetInstance().Log(
+                "Warning: Could not map config key '" +
+                std::string(1, value[0]) +
+                "' via VkKeyScanA. Using direct char value.");
+          }
         }
-
-        struct Entry { const char* key; std::string value; bool found; };
-        Entry entries[] = {
-            { "SPAM_DELAY_MS", spamDelay, false },
-            { "SPAM_KEY_DOWN_DURATION", spamDuration, false },
-            { "isLocked", isLockedStr, false },
-            { "enable_spam", enableSpamStr, false },
-            { "enable_snaptap", snapTapStr, false },
-            { "KEY_SPAM_TRIGGER", triggerStr, false },
-        };
-
-        auto trim = [](std::string& s) {
-            size_t first = s.find_first_not_of(" \t\n\r\f\v");
-            if (first == std::string::npos) { s.clear(); return; }
-            size_t last = s.find_last_not_of(" \t\n\r\f\v");
-            s = s.substr(first, last - first + 1);
-        };
-
-        for (std::string& line : lines) {
-            std::string working = line;
-            trim(working);
-            if (working.empty() || working[0] == '#') {
-                continue;
-            }
-
-            size_t eq = working.find('=');
-            if (eq == std::string::npos) {
-                continue;
-            }
-
-            std::string key = working.substr(0, eq);
-            trim(key);
-
-            if (key == "isWASDStrafingEnabled") {
-                line = "# legacy key migrated to enable_spam";
-                continue;
-            }
-
-            for (auto& e : entries) {
-                if (key == e.key) {
-                    line = key + " = " + e.value;
-                    e.found = true;
-                    break;
-                }
-            }
-        }
-
-        bool anyMissing = false;
-        for (const auto& e : entries) {
-            if (!e.found) {
-                anyMissing = true;
-                break;
-            }
-        }
-
-        if (lines.empty()) {
-            lines.push_back("# Configuration file for StrafeHelper");
-        }
-
-        if (anyMissing) {
-            lines.push_back("");
-            lines.push_back("# Updated by StrafeHelper");
-            for (const auto& e : entries) {
-                if (!e.found) {
-                    lines.push_back(std::string(e.key) + " = " + e.value);
-                }
-            }
-        }
-
-        std::ofstream out(CONFIG_FILE_NAME, std::ios::trunc);
-        if (!out.is_open()) {
-            std::cerr << "Warning: Failed to open config file '" << CONFIG_FILE_NAME << "' for writing." << std::endl;
-            return;
-        }
-
-        for (size_t i = 0; i < lines.size(); ++i) {
-            out << lines[i];
-            if (i + 1 < lines.size()) out << std::endl;
-        }
-        out.close();
-
-        std::cout << "Configuration saved to " << CONFIG_FILE_NAME << std::endl;
+      }
+    } catch (const std::exception &e) {
+      Logger::GetInstance().Log("Warning: Invalid config value on line " +
+                                std::to_string(lineNumber) + " for key '" +
+                                key + "': " + value + " (" + e.what() + ")");
     }
+  }
+  configFile.close();
+
+  if (!hasEnableSpam) {
+    EnableSpam.store(legacyEnableSpam, std::memory_order_relaxed);
+  }
+
+  std::string logMsg = "Configuration loaded:\n";
+  logMsg += "  SPAM_DELAY_MS: " + std::to_string(SpamDelayMs.load()) + "\n";
+  logMsg += "  SPAM_KEY_DOWN_DURATION: " +
+            std::to_string(SpamKeyDownDurationMs.load()) + "\n";
+  logMsg +=
+      "  isLocked: " + std::string(IsLocked.load() ? "true" : "false") + "\n";
+  logMsg +=
+      "  enable_spam: " + std::string(EnableSpam.load() ? "true" : "false") +
+      "\n";
+  logMsg += "  enable_snaptap: " +
+            std::string(EnableSnapTap.load() ? "true" : "false") + "\n";
+  logMsg += "  KEY_SPAM_TRIGGER: " +
+            std::string(1, static_cast<char>(KeySpamTrigger.load())) +
+            " (VK: " + std::to_string(KeySpamTrigger.load()) + ")";
+  Logger::GetInstance().Log(logMsg);
+}
+
+void SaveConfig() {
+  const std::string spamDelay = std::to_string(SpamDelayMs.load());
+  const std::string spamDuration = std::to_string(SpamKeyDownDurationMs.load());
+  const std::string isLockedStr = IsLocked.load() ? "true" : "false";
+  const std::string enableSpamStr = EnableSpam.load() ? "true" : "false";
+  const std::string snapTapStr = EnableSnapTap.load() ? "true" : "false";
+  const std::string triggerStr(1, static_cast<char>(KeySpamTrigger.load()));
+
+  // Update-in-place: preserve unknown keys/comments, replace known keys, append
+  // missing ones.
+  std::vector<std::string> lines;
+  {
+    std::ifstream in(CONFIG_FILE_NAME);
+    std::string line;
+    while (std::getline(in, line)) {
+      lines.push_back(line);
+    }
+  }
+
+  struct Entry {
+    const char *key;
+    std::string value;
+    bool found;
+  };
+  Entry entries[] = {
+      {"SPAM_DELAY_MS", spamDelay, false},
+      {"SPAM_KEY_DOWN_DURATION", spamDuration, false},
+      {"isLocked", isLockedStr, false},
+      {"enable_spam", enableSpamStr, false},
+      {"enable_snaptap", snapTapStr, false},
+      {"KEY_SPAM_TRIGGER", triggerStr, false},
+  };
+
+  auto trim = [](std::string &s) {
+    size_t first = s.find_first_not_of(" \t\n\r\f\v");
+    if (first == std::string::npos) {
+      s.clear();
+      return;
+    }
+    size_t last = s.find_last_not_of(" \t\n\r\f\v");
+    s = s.substr(first, last - first + 1);
+  };
+
+  for (std::string &line : lines) {
+    std::string working = line;
+    trim(working);
+    if (working.empty() || working[0] == '#') {
+      continue;
+    }
+
+    size_t eq = working.find('=');
+    if (eq == std::string::npos) {
+      continue;
+    }
+
+    std::string key = working.substr(0, eq);
+    trim(key);
+
+    if (key == "isWASDStrafingEnabled") {
+      line = "# legacy key migrated to enable_spam";
+      continue;
+    }
+
+    for (auto &e : entries) {
+      if (key == e.key) {
+        line = key + " = " + e.value;
+        e.found = true;
+        break;
+      }
+    }
+  }
+
+  bool anyMissing = false;
+  for (const auto &e : entries) {
+    if (!e.found) {
+      anyMissing = true;
+      break;
+    }
+  }
+
+  if (lines.empty()) {
+    lines.push_back("# Configuration file for StrafeHelper");
+  }
+
+  if (anyMissing) {
+    lines.push_back("");
+    lines.push_back("# Updated by StrafeHelper");
+    for (const auto &e : entries) {
+      if (!e.found) {
+        lines.push_back(std::string(e.key) + " = " + e.value);
+      }
+    }
+  }
+
+  std::ofstream out(CONFIG_FILE_NAME, std::ios::trunc);
+  if (!out.is_open()) {
+    Logger::GetInstance().Log("Warning: Failed to open config file '" +
+                              std::string(CONFIG_FILE_NAME) + "' for writing.");
+    return;
+  }
+
+  for (size_t i = 0; i < lines.size(); ++i) {
+    out << lines[i];
+    if (i + 1 < lines.size())
+      out << std::endl;
+  }
+  out.close();
+
+  Logger::GetInstance().Log("Configuration saved to " +
+                            std::string(CONFIG_FILE_NAME));
+}
 
 } // namespace Config

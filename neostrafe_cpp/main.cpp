@@ -1,95 +1,129 @@
 // main.cpp
 #define WIN32_LEAN_AND_MEAN
+#include "Application.h"
+#include "Config.h"
+#include "Logger.h"
+#include "gui/GuiManager.h"
+#include "imgui/imgui.h"
+#include <string>
 #include <windows.h>
-#include "Application.h" // For InitializeApplication
-#include "Config.h"      // For APP_NAME, VERSION
-#include "Utils.h"       // For LogError
-#include <iostream>      // For console output
-#include <cstdio>        // For freopen_s, setvbuf
-#include <tchar.h>       // For SetConsoleTitle
 
-static void SetupConsole() {
-    // If launched from an existing console, reuse it. Otherwise, always create one (even in Release builds).
-    if (!GetConsoleWindow()) {
-        if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
-            if (!AllocConsole()) {
-                OutputDebugStringA("ERROR: AllocConsole() failed.\n");
-                return;
-            }
-        }
+// Global window handle for the main GUI
+HWND g_hwnd = NULL;
+
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd,
+                                                             UINT msg,
+                                                             WPARAM wParam,
+                                                             LPARAM lParam);
+
+LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam,
+                             LPARAM lParam) {
+  if (Gui::GuiManager::GetInstance().WndProcHandler(hwnd, msg, wParam, lParam))
+    return true;
+
+  switch (msg) {
+  case WM_NCHITTEST: {
+    LRESULT hit = DefWindowProc(hwnd, msg, wParam, lParam);
+    if (hit == HTCLIENT && ImGui::GetCurrentContext() != nullptr) {
+      if (!ImGui::GetIO().WantCaptureMouse) {
+        POINT pt = {LOWORD(lParam), HIWORD(lParam)};
+        ScreenToClient(hwnd, &pt);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        int border = 30; // 30px handles for top/bottom
+        if (pt.y < border || pt.y > (rc.bottom - border))
+          return HTCAPTION;
+      }
     }
-
-    FILE* pCout = nullptr;
-    FILE* pCerr = nullptr;
-    FILE* pCin = nullptr;
-
-    // Redirect standard streams so std::cout/cerr work reliably.
-    if (freopen_s(&pCout, "CONOUT$", "w", stdout) == 0 &&
-        freopen_s(&pCerr, "CONOUT$", "w", stderr) == 0 &&
-        freopen_s(&pCin, "CONIN$", "r", stdin) == 0)
-    {
-        clearerr(stdout);
-        clearerr(stderr);
-        clearerr(stdin);
-
-        // Unbuffered output to make logs show immediately.
-        setvbuf(stdout, nullptr, _IONBF, 0);
-        setvbuf(stderr, nullptr, _IONBF, 0);
-
-        const std::string title = std::string(Config::APP_NAME) + " v" + Config::VERSION + " Console";
-        SetConsoleTitleA(title.c_str());
-        std::ios::sync_with_stdio(true);
-
-        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-        CONSOLE_SCREEN_BUFFER_INFO csbi = {};
-        if (hOut != INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(hOut, &csbi)) {
-            const WORD oldAttr = csbi.wAttributes;
-            SetConsoleTextAttribute(hOut, FOREGROUND_GREEN | FOREGROUND_INTENSITY);
-            std::cout << "StrafeHelper console attached." << std::endl;
-            SetConsoleTextAttribute(hOut, oldAttr);
-        }
-        else {
-            std::cout << "StrafeHelper console attached." << std::endl;
-        }
-    }
-    else {
-        OutputDebugStringA("ERROR: Failed to redirect standard streams to console.\n");
-    }
+    return hit;
+  }
+  case WM_SYSCOMMAND:
+    if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
+      return 0;
+    break;
+  case WM_DESTROY:
+    PostQuitMessage(0);
+    return 0;
+  }
+  return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
+                   LPSTR lpCmdLine, int nCmdShow) {
+  Logger::GetInstance().Log(std::string(Config::APP_NAME) + " v" +
+                            Config::VERSION + " starting...");
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    SetupConsole();
+  // Register UI Window Class
+  WNDCLASSEXW wc = {
+      sizeof(WNDCLASSEXW),     CS_CLASSDC, MainWndProc, 0L,   0L,
+      GetModuleHandle(NULL),   NULL,       NULL,        NULL, NULL,
+      L"StrafeHelperGUIClass", NULL};
+  ::RegisterClassExW(&wc);
 
-    // Use Config constants for name/version
-    std::cout << Config::APP_NAME << " v" << Config::VERSION << " starting..." << std::endl;
+  std::wstring windowTitle =
+      std::wstring(Config::APP_NAME,
+                   Config::APP_NAME + strlen(Config::APP_NAME)) +
+      L" - Configuration";
 
-    // Initialize core components
-    if (!InitializeApplication(hInstance)) {
-        LogError("Application Initialization Failed!");
-        // CleanupApplication should have been called partially by InitializeApplication on failure
-        MessageBoxA(NULL, "StrafeHelper failed to initialize. See console or log for details.", "Initialization Error", MB_OK | MB_ICONERROR);
-        return 1;
-    }
+  // Create application window
+  g_hwnd = ::CreateWindowW(wc.lpszClassName, windowTitle.c_str(), WS_POPUP, 100,
+                           100, 800, 600, NULL, NULL, wc.hInstance, NULL);
 
-    std::cout << "StrafeHelper running. Right-click tray icon to configure or exit." << std::endl;
+  // Initialize Direct3D and ImGui
+  if (!Gui::GuiManager::GetInstance().Initialize(g_hwnd)) {
+    ::DestroyWindow(g_hwnd);
+    ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
+    return 1;
+  }
 
-    // Main message loop
+  // Initialize backend services (Hook thread, Spam thread)
+  // We pass hInstance to let application setup tray or background hooks
+  if (!InitializeApplication(hInstance)) {
+    Logger::GetInstance().Log("Application Initialization Failed!");
+    MessageBoxA(
+        NULL,
+        "StrafeHelper failed to initialize. See console or log for details.",
+        "Initialization Error", MB_OK | MB_ICONERROR);
+    Gui::GuiManager::GetInstance().Shutdown();
+    ::DestroyWindow(g_hwnd);
+    ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
+    return 1;
+  }
+
+  ::ShowWindow(g_hwnd, SW_SHOWDEFAULT);
+  ::UpdateWindow(g_hwnd);
+
+  Logger::GetInstance().Log("StrafeHelper running. UI Active.");
+
+  // Main loop
+  bool done = false;
+  while (!done) {
     MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0) > 0) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+    while (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE)) {
+      ::TranslateMessage(&msg);
+      ::DispatchMessage(&msg);
+      if (msg.message == WM_QUIT)
+        done = true;
     }
+    if (done)
+      break;
 
-    std::cout << "Exiting StrafeHelper via message loop end (wParam=" << msg.wParam << ")." << std::endl;
+    // Render GUI frame
+    Gui::GuiManager::GetInstance().Render();
+  }
 
-    // Cleanup is handled by WM_DESTROY -> CleanupApplication()
-    // Do not call CleanupApplication() here again.
+  Logger::GetInstance().Log("Exiting StrafeHelper...");
 
-    return (int)msg.wParam;
+  // Cleanup
+  CleanupApplication();
+  Gui::GuiManager::GetInstance().Shutdown();
+  ::DestroyWindow(g_hwnd);
+  ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
+
+  return 0;
 }
 
-// Some build configs use /SUBSYSTEM:CONSOLE; provide main() so they link cleanly.
 int main() {
-    return WinMain(GetModuleHandle(nullptr), nullptr, GetCommandLineA(), SW_SHOWDEFAULT);
+  return WinMain(GetModuleHandle(nullptr), nullptr, GetCommandLineA(),
+                 SW_SHOWDEFAULT);
 }
