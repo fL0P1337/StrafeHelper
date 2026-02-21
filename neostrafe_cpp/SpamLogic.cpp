@@ -10,6 +10,7 @@
 #include <vector>
 #include <windows.h> // <-- Add
 
+
 namespace {
 std::atomic<bool> g_stopSpamThreadRequest = false;
 
@@ -22,94 +23,77 @@ void GetSpamSnapshot(std::vector<int> &keys, unsigned long long &epoch) {
 } // namespace
 
 DWORD WINAPI SpamThread(LPVOID lpParam) {
-  std::vector<int> desiredKeys;
-  std::vector<int> keysCurrentlyDown;
-  desiredKeys.reserve(8);
-  keysCurrentlyDown.reserve(8);
+  std::vector<int> localActiveKeys;
+  localActiveKeys.reserve(8);
 
   while (!g_stopSpamThreadRequest.load(std::memory_order_relaxed)) {
     DWORD spamDelay = Config::SpamDelayMs.load(std::memory_order_relaxed);
-    DWORD keyDownDuration =
-        Config::SpamKeyDownDurationMs.load(std::memory_order_relaxed);
+    DWORD waitTimeout = INFINITE;
 
     bool shouldBeActive =
         Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
         Config::EnableSpam.load(std::memory_order_relaxed);
 
-    unsigned long long epoch = 0;
-
     if (shouldBeActive) {
-      GetSpamSnapshot(desiredKeys, epoch);
-    } else {
-      // Spam deactivated (e.g., C released).
-      // The main thread's CleanupSpamState has ALREADY handled sending the
-      // final KEY_UP and restoring physically held keys with KEY_DOWN. We MUST
-      // NOT send KEY_UP here, or we will destroy the newly restored KEY_DOWN
-      // state!
-      desiredKeys.clear();
-      keysCurrentlyDown.clear();
-      WaitForSingleObject(Globals::g_hSpamEvent, INFINITE);
-      continue;
-    }
+      unsigned long long ignoredEpoch = 0;
+      GetSpamSnapshot(localActiveKeys, ignoredEpoch);
+      const bool keysCurrentlyActive = !localActiveKeys.empty();
 
-    // Release any keys that are no longer in desiredKeys (e.g., user released W
-    // mid-spam)
-    std::vector<int> keysToRelease;
-    for (auto it = keysCurrentlyDown.begin(); it != keysCurrentlyDown.end();) {
-      int pressed_key = *it;
-      if (std::find(desiredKeys.begin(), desiredKeys.end(), pressed_key) ==
-          desiredKeys.end()) {
-        keysToRelease.push_back(pressed_key);
-        it = keysCurrentlyDown.erase(it);
-      } else {
-        ++it;
+      if (keysCurrentlyActive) {
+        waitTimeout = spamDelay;
       }
     }
 
-    if (!keysToRelease.empty()) {
-      SendKeyInputBatch(keysToRelease, false);
+    WaitForSingleObject(Globals::g_hSpamEvent, waitTimeout);
+
+    if (g_stopSpamThreadRequest.load(std::memory_order_relaxed)) {
+      break;
     }
 
-    // Wait for spamDelay IF we just released keys (or are looping),
-    // EXCEPT if we woke up from INFINITE and are starting completely fresh.
-    // We use waitTimeout = spamDelay if we are actively spamming.
-    // If waitTimeout == 0, we skip the Phase 1 delay.
-    DWORD waitRes = WaitForSingleObject(
-        Globals::g_hSpamEvent, keysCurrentlyDown.empty() ? 0 : spamDelay);
-    if (g_stopSpamThreadRequest.load(std::memory_order_relaxed))
-      break;
-
-    // At this point, whether we timed out (natural delay) or were signaled (new
-    // keys/trigger), we re-evaluate if we should press keys DOWN.
-
-    // Re-check activation and snapshot before pressing keys DOWN
     shouldBeActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
                      Config::EnableSpam.load(std::memory_order_relaxed);
-    if (!shouldBeActive)
+
+    if (!shouldBeActive) {
       continue;
+    }
 
-    GetSpamSnapshot(desiredKeys, epoch);
-    if (desiredKeys.empty())
+    unsigned long long epochBeforeUp = 0;
+    GetSpamSnapshot(localActiveKeys, epochBeforeUp);
+
+    if (localActiveKeys.empty()) {
       continue;
+    }
 
-    // Phase 2: Press desiredKeys DOWN and wait keyDownDuration
-    SendKeyInputBatch(desiredKeys, true);
-    keysCurrentlyDown = desiredKeys;
+    SendKeyInputBatch(localActiveKeys, false);
 
-    waitRes = WaitForSingleObject(Globals::g_hSpamEvent, keyDownDuration);
-    if (g_stopSpamThreadRequest.load(std::memory_order_relaxed))
-      break;
+    DWORD keyDownDuration =
+        Config::SpamKeyDownDurationMs.load(std::memory_order_relaxed);
+    if (keyDownDuration > 0) {
+      Sleep(keyDownDuration);
+      if (g_stopSpamThreadRequest.load(std::memory_order_relaxed)) {
+        break;
+      }
+    }
 
-    // At the end of Phase 2 (whether timed out or signaled), loop back to top.
-    // The top of the loop will handle sending them UP for Phase 1.
-    // To fix this, we ALWAYS release all currentlyDown keys at the end of the
-    // duration so they are UP during spamDelay.
-    SendKeyInputBatch(keysCurrentlyDown, false);
-    keysCurrentlyDown.clear();
-  }
+    shouldBeActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
+                     Config::EnableSpam.load(std::memory_order_relaxed);
+    if (!shouldBeActive) {
+      continue;
+    }
 
-  if (!keysCurrentlyDown.empty()) {
-    SendKeyInputBatch(keysCurrentlyDown, false);
+    unsigned long long epochBeforeDown = 0;
+    GetSpamSnapshot(localActiveKeys, epochBeforeDown);
+
+    if (localActiveKeys.empty()) {
+      continue;
+    }
+
+    if (Globals::g_spamKeysEpoch.load(std::memory_order_relaxed) !=
+        epochBeforeDown) {
+      continue;
+    }
+
+    SendKeyInputBatch(localActiveKeys, true);
   }
 
   std::cout << "Spam thread exiting." << std::endl;

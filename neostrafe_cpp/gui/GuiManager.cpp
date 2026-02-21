@@ -107,21 +107,30 @@ void GuiManager::Render() {
                                  ImGuiWindowFlags_NoSavedSettings |
                                  ImGuiWindowFlags_NoBringToFrontOnFocus;
 
+  // Remove all padding, rounding, and borders to eliminate visual artifacts
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 9.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.10f, 1.00f));
 
   ImGui::Begin("StrafeHelper", nullptr, windowFlags);
   {
     ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor();
+
     auto draw = ImGui::GetWindowDrawList();
     auto pos = ImGui::GetWindowPos();
     auto size = ImGui::GetWindowSize();
 
+    // Draw full window background first to eliminate any gaps
+    draw->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+                        ImColor(20, 20, 26), 0.0f);
+
+    // Draw title bar area
     draw->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + 51),
-                        ImColor(24, 24, 24), 9.0f, ImDrawCornerFlags_Top);
-    // MultiColorRounded is an extension, use standard AddRectFilledMultiColor
-    // with a clip rect
+                        ImColor(24, 24, 24), 0.0f);
+
+    // Subtle gradient accent on left side of title bar
     ImGui::PushClipRect(pos, ImVec2(pos.x + 55, pos.y + 51), true);
     draw->AddRectFilledMultiColor(
         pos, ImVec2(pos.x + 55, pos.y + 51), ImColor(1.0f, 1.0f, 1.0f, 0.00f),
@@ -184,7 +193,8 @@ void GuiManager::Render() {
   ImGui::End();
 
   ImGui::Render();
-  const float clear_color_with_alpha[4] = {0.00f, 0.00f, 0.00f, 1.00f};
+  // Use fully opaque background color matching the theme
+  const float clear_color_with_alpha[4] = {0.08f, 0.08f, 0.10f, 1.00f};
   g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
   g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView,
                                              clear_color_with_alpha);
@@ -319,20 +329,35 @@ void GuiManager::RenderStateContent() {
 void GuiManager::ApplyDarkTheme() {
   ImGui::StyleColorsDark();
   ImGuiStyle &style = ImGui::GetStyle();
-  style.Colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.08f, 0.10f, 1.00f);
-  style.Colors[ImGuiCol_ChildBg] = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
-  style.Colors[ImGuiCol_Border] = ImVec4(0.20f, 0.20f, 0.25f, 0.60f);
+
+  // Unified dark background - consistent across all elements
+  const ImVec4 bgColor = ImVec4(0.08f, 0.08f, 0.10f, 1.00f);
+  const ImVec4 childBgColor = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
+
+  style.Colors[ImGuiCol_WindowBg] = bgColor;
+  style.Colors[ImGuiCol_ChildBg] = childBgColor;
+  style.Colors[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.08f, 0.10f, 0.95f);
+  // Set border to match background to eliminate any white lines
+  style.Colors[ImGuiCol_Border] = ImVec4(0.08f, 0.08f, 0.10f, 0.00f);
+  style.Colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
   style.Colors[ImGuiCol_FrameBg] = ImVec4(0.14f, 0.18f, 0.26f, 1.00f);
   style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.18f, 0.24f, 0.36f, 1.00f);
   style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.22f, 0.30f, 0.46f, 1.00f);
-  style.Colors[ImGuiCol_TitleBgActive] = ImVec4(0.16f, 0.29f, 0.48f, 1.00f);
+  style.Colors[ImGuiCol_TitleBg] = bgColor;
+  style.Colors[ImGuiCol_TitleBgActive] = bgColor;
+  style.Colors[ImGuiCol_TitleBgCollapsed] = bgColor;
   style.Colors[ImGuiCol_MenuBarBg] = ImVec4(0.10f, 0.14f, 0.22f, 1.00f);
   style.Colors[ImGuiCol_CheckMark] = ImVec4(0.4f, 0.8f, 0.4f, 1.0f);
+  style.Colors[ImGuiCol_Separator] = ImVec4(0.15f, 0.15f, 0.18f, 1.00f);
+  style.Colors[ImGuiCol_SeparatorHovered] = ImVec4(0.20f, 0.20f, 0.25f, 1.00f);
+  style.Colors[ImGuiCol_SeparatorActive] = ImVec4(0.25f, 0.25f, 0.30f, 1.00f);
+
+  // Remove all rounding and borders for cleaner look
   style.WindowRounding = 0.0f;
-  style.ChildRounding = 3.0f;
+  style.ChildRounding = 0.0f;
   style.FrameRounding = 3.0f;
   style.WindowBorderSize = 0.0f;
-  style.ChildBorderSize = 1.0f;
+  style.ChildBorderSize = 0.0f;
   style.FrameBorderSize = 0.0f;
   style.ItemSpacing = ImVec2(8, 4);
   style.ItemInnerSpacing = ImVec2(4, 4);

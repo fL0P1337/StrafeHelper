@@ -5,9 +5,9 @@
 #include "Logger.h"
 #include "gui/GuiManager.h"
 #include "imgui/imgui.h"
+#include <dwmapi.h>
 #include <string>
 #include <windows.h>
-#include <dwmapi.h>
 
 #pragma comment(lib, "dwmapi.lib")
 
@@ -19,14 +19,35 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd,
                                                              LPARAM lParam);
 
 static void EnableBorderlessResize(HWND hwnd) {
-  MARGINS margins = { -1, -1, -1, -1 };
+  // Extend the frame into the client area to remove the standard window frame
+  // This removes the white top border completely
+  MARGINS margins = {0, 0, 0, 1};
   DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+  // Ensure the window has proper styling for borderless resize
+  LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+  style |= WS_THICKFRAME | WS_POPUP;
+  style &= ~WS_CAPTION;
+  SetWindowLongPtr(hwnd, GWL_STYLE, style);
+
   SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
-               SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
+               SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOMOVE | SWP_NOSIZE |
+                   SWP_FRAMECHANGED);
 }
 
 LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam,
-                              LPARAM lParam) {
+                             LPARAM lParam) {
+  // Handle WM_NCCALCSIZE to remove the non-client area (white top border)
+  if (msg == WM_NCCALCSIZE) {
+    if (wParam) {
+      // When wParam is TRUE, lParam points to NCCALCSIZE_PARAMS
+      // We return 0 to indicate the entire window is client area
+      return 0;
+    }
+    // When wParam is FALSE, lParam points to RECT
+    // We still return 0 to let DefWindowProc handle it
+  }
+
   if (msg == WM_NCHITTEST) {
     LRESULT hit = DefWindowProc(hwnd, msg, wParam, lParam);
     if (hit == HTCLIENT) {
@@ -43,14 +64,22 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam,
       bool top = pt.y < resizeBorder;
       bool bottom = pt.y >= rc.bottom - resizeBorder;
 
-      if (top && left) return HTTOPLEFT;
-      if (top && right) return HTTOPRIGHT;
-      if (bottom && left) return HTBOTTOMLEFT;
-      if (bottom && right) return HTBOTTOMRIGHT;
-      if (left) return HTLEFT;
-      if (right) return HTRIGHT;
-      if (top) return HTTOP;
-      if (bottom) return HTBOTTOM;
+      if (top && left)
+        return HTTOPLEFT;
+      if (top && right)
+        return HTTOPRIGHT;
+      if (bottom && left)
+        return HTBOTTOMLEFT;
+      if (bottom && right)
+        return HTBOTTOMRIGHT;
+      if (left)
+        return HTLEFT;
+      if (right)
+        return HTRIGHT;
+      if (top)
+        return HTTOP;
+      if (bottom)
+        return HTBOTTOM;
 
       if (pt.y < dragBorder || pt.y > (rc.bottom - dragBorder))
         return HTCAPTION;
@@ -92,8 +121,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
   // Create application window (WS_THICKFRAME required for native resize)
   g_hwnd = ::CreateWindowW(wc.lpszClassName, windowTitle.c_str(),
-                           WS_POPUP | WS_THICKFRAME, 100,
-                           100, 420, 380, NULL, NULL, wc.hInstance, NULL);
+                           WS_POPUP | WS_THICKFRAME, 100, 100, 420, 380, NULL,
+                           NULL, wc.hInstance, NULL);
 
   EnableBorderlessResize(g_hwnd);
 
