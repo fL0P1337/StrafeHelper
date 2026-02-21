@@ -141,13 +141,25 @@ void GuiManager::Render() {
     ImGui::SetCursorPos({160, 19});
     ImGui::BeginGroup();
     {
-      if (elements::tab("Config", m_currentTab == TabSelection::CONFIG))
+      // Calculate responsive tab widths based on available window space
+      const float tabAreaStart = 160.0f;
+      const float tabAreaEnd = size.x - 15.0f; // Right padding
+      const float availableWidth = tabAreaEnd - tabAreaStart;
+      const int numTabs = 3;
+      const float tabSpacing = 4.0f; // Spacing between tabs
+      const float totalSpacing = tabSpacing * (numTabs - 1);
+      const float tabWidth = (availableWidth - totalSpacing) / numTabs;
+
+      if (elements::tab("Config", m_currentTab == TabSelection::CONFIG,
+                        tabWidth))
         m_currentTab = TabSelection::CONFIG;
-      ImGui::SameLine();
-      if (elements::tab("Monitor", m_currentTab == TabSelection::STATE))
+      ImGui::SameLine(0, tabSpacing);
+      if (elements::tab("Monitor", m_currentTab == TabSelection::STATE,
+                        tabWidth))
         m_currentTab = TabSelection::STATE;
-      ImGui::SameLine();
-      if (elements::tab("Console", m_currentTab == TabSelection::CONSOLE))
+      ImGui::SameLine(0, tabSpacing);
+      if (elements::tab("Console", m_currentTab == TabSelection::CONSOLE,
+                        tabWidth))
         m_currentTab = TabSelection::CONSOLE;
     }
     ImGui::EndGroup();

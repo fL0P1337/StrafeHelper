@@ -11,5 +11,5 @@
 #include "../imgui/imgui_internal.h"
 
 namespace elements {
-bool tab(const char *name, bool boolean);
+bool tab(const char *name, bool boolean, float width = -1.0f);
 }
