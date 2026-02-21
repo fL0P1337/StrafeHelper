@@ -133,12 +133,10 @@ namespace {
 
     void PublishSpamKeysFromState(bool snapTapEnabled) {
         const std::vector<int> desiredKeys = BuildDesiredSpamKeys(snapTapEnabled);
-        std::vector<int> previousKeys;
         bool changed = false;
 
         EnterCriticalSection(&Globals::g_csActiveKeys);
-        previousKeys = Globals::g_activeSpamKeys;
-        if (previousKeys != desiredKeys) {
+        if (Globals::g_activeSpamKeys != desiredKeys) {
             Globals::g_activeSpamKeys = desiredKeys;
             Globals::g_spamKeysEpoch.fetch_add(1ULL, std::memory_order_relaxed);
             changed = true;
@@ -153,11 +151,6 @@ namespace {
         LeaveCriticalSection(&Globals::g_csActiveKeys);
 
         if (changed) {
-            for (int oldKey : previousKeys) {
-                if (std::find(desiredKeys.begin(), desiredKeys.end(), oldKey) == desiredKeys.end()) {
-                    SendKeyUpImmediate(oldKey);
-                }
-            }
             if (Globals::g_hSpamEvent) {
                 SetEvent(Globals::g_hSpamEvent);
             }

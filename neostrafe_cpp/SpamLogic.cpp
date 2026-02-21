@@ -14,6 +14,19 @@
 namespace {
 std::atomic<bool> g_stopSpamThreadRequest = false;
 
+bool IsPhysicallyHeldMovementKey(int vkCode) {
+  if (vkCode != 'W' && vkCode != 'A' && vkCode != 'S' && vkCode != 'D') {
+    return false;
+  }
+
+  const auto it = Globals::g_KeyInfo.find(vkCode);
+  if (it == Globals::g_KeyInfo.end()) {
+    return false;
+  }
+
+  return it->second.physicalKeyDown.load(std::memory_order_relaxed);
+}
+
 void GetSpamSnapshot(std::vector<int> &keys, unsigned long long &epoch) {
   EnterCriticalSection(&Globals::g_csActiveKeys);
   keys = Globals::g_activeSpamKeys;
@@ -25,6 +38,31 @@ void GetSpamSnapshot(std::vector<int> &keys, unsigned long long &epoch) {
 DWORD WINAPI SpamThread(LPVOID lpParam) {
   std::vector<int> localActiveKeys;
   localActiveKeys.reserve(8);
+  std::vector<int> virtuallyDownKeys;
+  virtuallyDownKeys.reserve(8);
+
+  auto releaseVirtuallyDownKeys = [&virtuallyDownKeys](bool preserveHeldKeys) {
+    if (virtuallyDownKeys.empty()) {
+      return;
+    }
+
+    std::vector<int> keysToRelease;
+    keysToRelease.reserve(virtuallyDownKeys.size());
+
+    for (int vk : virtuallyDownKeys) {
+      if (preserveHeldKeys && IsPhysicallyHeldMovementKey(vk)) {
+        // Transfer ownership to default handling without a forced key-up.
+        continue;
+      }
+      keysToRelease.push_back(vk);
+    }
+
+    if (!keysToRelease.empty()) {
+      SendKeyInputBatch(keysToRelease, false);
+    }
+
+    virtuallyDownKeys.clear();
+  };
 
   while (!g_stopSpamThreadRequest.load(std::memory_order_relaxed)) {
     DWORD spamDelay = Config::SpamDelayMs.load(std::memory_order_relaxed);
@@ -47,6 +85,7 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
     WaitForSingleObject(Globals::g_hSpamEvent, waitTimeout);
 
     if (g_stopSpamThreadRequest.load(std::memory_order_relaxed)) {
+      releaseVirtuallyDownKeys(false);
       break;
     }
 
@@ -54,23 +93,25 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
                      Config::EnableSpam.load(std::memory_order_relaxed);
 
     if (!shouldBeActive) {
+      releaseVirtuallyDownKeys(true);
       continue;
     }
 
-    unsigned long long epochBeforeUp = 0;
-    GetSpamSnapshot(localActiveKeys, epochBeforeUp);
+    // Always release keys that this thread previously drove down.
+    releaseVirtuallyDownKeys(false);
 
+    unsigned long long ignoredEpoch = 0;
+    GetSpamSnapshot(localActiveKeys, ignoredEpoch);
     if (localActiveKeys.empty()) {
       continue;
     }
-
-    SendKeyInputBatch(localActiveKeys, false);
 
     DWORD keyDownDuration =
         Config::SpamKeyDownDurationMs.load(std::memory_order_relaxed);
     if (keyDownDuration > 0) {
       Sleep(keyDownDuration);
       if (g_stopSpamThreadRequest.load(std::memory_order_relaxed)) {
+        releaseVirtuallyDownKeys(false);
         break;
       }
     }
@@ -94,7 +135,10 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
     }
 
     SendKeyInputBatch(localActiveKeys, true);
+    virtuallyDownKeys = localActiveKeys;
   }
+
+  releaseVirtuallyDownKeys(false);
 
   std::cout << "Spam thread exiting." << std::endl;
   return 0;
@@ -125,7 +169,10 @@ void CleanupSpamState(bool restoreHeldKeys) {
   Globals::g_isCSpamActive.store(false, std::memory_order_relaxed); // Globals::
 
   std::vector<int> keysThatWereSpamming;
+  std::vector<int> keysToRelease;
+  std::vector<int> physicallyHeldKeys;
   std::vector<int> keysToRestoreDown;
+  physicallyHeldKeys.reserve(4);
 
   EnterCriticalSection(&Globals::g_csActiveKeys);   // Globals::
   keysThatWereSpamming = Globals::g_activeSpamKeys; // Globals::
@@ -138,19 +185,31 @@ void CleanupSpamState(bool restoreHeldKeys) {
     Globals::KeyState &state = Globals::g_KeyInfo[key]; // Globals:: (both)
     // ---
     state.spamming.store(false, std::memory_order_relaxed); // Use variable
-    if (restoreHeldKeys &&
-        state.physicalKeyDown.load(std::memory_order_relaxed)) { // Use variable
-      keysToRestoreDown.push_back(key);
+    const bool physicallyHeld = state.physicalKeyDown.load(std::memory_order_relaxed);
+    if (physicallyHeld) {
+      physicallyHeldKeys.push_back(key);
+      if (restoreHeldKeys) {
+        keysToRestoreDown.push_back(key);
+      }
     }
   }
 
-  if (!keysThatWereSpamming.empty()) {
-    SendKeyInputBatch(keysThatWereSpamming, false);
+  keysToRelease.reserve(keysThatWereSpamming.size());
+  for (int vk : keysThatWereSpamming) {
+    const bool isStillPhysicallyHeld =
+        std::find(physicallyHeldKeys.begin(), physicallyHeldKeys.end(), vk) !=
+        physicallyHeldKeys.end();
+    if (!isStillPhysicallyHeld) {
+      keysToRelease.push_back(vk);
+    }
+  }
+
+  if (!keysToRelease.empty()) {
+    SendKeyInputBatch(keysToRelease, false);
     std::cout << "  Sent final UP for spammed keys." << std::endl;
   }
 
   if (restoreHeldKeys && !keysToRestoreDown.empty()) {
-    Sleep(5);
     SendKeyInputBatch(keysToRestoreDown, true);
     std::cout << "  Restored DOWN state for physically held keys: ";
     for (int k : keysToRestoreDown)
