@@ -1,0 +1,51 @@
+MSBuild version 18.3.0-release-26070-10+3972042b7 for .NET Framework
+Build started 2/21/2026 12:38:24 AM.
+
+Project "D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj" on node 1 (default targets).
+PrepareForBuild:
+  Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+InitializeBuildStatus:
+  Touching "neostrafe_cpp\x64\Release\neostrafe_cpp.tlog\unsuccessfulbuild".
+ClCompile:
+  All outputs are up-to-date.
+Link:
+  C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.44.35207\bin\HostX86\x64\link.exe /ERRORREPORT:QUEUE /OUT:"D:\repos\neostrafe_cpp\neostrafe_cpp\x64\Release\neostrafe_cpp.exe" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib user32.lib d3d11.lib d3dcompiler.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:\repos\neostrafe_cpp\neostrafe_cpp\x64\Release\neostrafe_cpp.pdb" /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF /LTCG:incremental /LTCGOUT:"neostrafe_cpp\x64\Release\neostrafe_cpp.iobj" /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:"D:\repos\neostrafe_cpp\neostrafe_cpp\x64\Release\neostrafe_cpp.lib" /MACHINE:X64 neostrafe_cpp\x64\Release\Application.obj
+  neostrafe_cpp\x64\Release\AppWindow.obj
+  neostrafe_cpp\x64\Release\Config.obj
+  neostrafe_cpp\x64\Release\KeyboardHook.obj
+  neostrafe_cpp\x64\Release\main.obj
+  neostrafe_cpp\x64\Release\SpamLogic.obj
+  neostrafe_cpp\x64\Release\elements.obj
+  neostrafe_cpp\x64\Release\Utils.obj
+  neostrafe_cpp\x64\Release\Logger.obj
+  neostrafe_cpp\x64\Release\GuiManager.obj
+  neostrafe_cpp\x64\Release\imgui.obj
+  neostrafe_cpp\x64\Release\imgui_demo.obj
+  neostrafe_cpp\x64\Release\imgui_draw.obj
+  neostrafe_cpp\x64\Release\imgui_tables.obj
+  neostrafe_cpp\x64\Release\imgui_widgets.obj
+  neostrafe_cpp\x64\Release\imgui_impl_win32.obj
+  neostrafe_cpp\x64\Release\imgui_impl_dx11.obj
+AppWindow.obj : error LNK2001: unresolved external symbol "void __cdecl ShowContextMenu(struct HWND__ *)" (?ShowContextMenu@@YAXPEAUHWND__@@@Z) [D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj]
+GuiManager.obj : error LNK2001: unresolved external symbol "public: void __cdecl ImDrawList::AddText(struct ImFont const *,float,struct ImVec2 const &,unsigned int,char const *,char const *,float,struct ImVec4 const *)" (?AddText@ImDrawList@@QEAAXPEBUImFont@@MAEBUImVec2@@IPEBD2MPEBUImVec4@@@Z) [D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj]
+GuiManager.obj : error LNK2001: unresolved external symbol "public: void __cdecl ImDrawList::AddRectFilledMultiColorRounded(struct ImVec2 const &,struct ImVec2 const &,unsigned int,unsigned int,unsigned int,unsigned int,unsigned int,float,int)" (?AddRectFilledMultiColorRounded@ImDrawList@@QEAAXAEBUImVec2@@0IIIIIMH@Z) [D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj]
+GuiManager.obj : error LNK2001: unresolved external symbol "bool __cdecl ImGui::BeginChild(char const *,struct ImVec2 const &,bool,int)" (?BeginChild@ImGui@@YA_NPEBDAEBUImVec2@@_NH@Z) [D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj]
+GuiManager.obj : error LNK2001: unresolved external symbol "void __cdecl ImGui::PushFont(struct ImFont *)" (?PushFont@ImGui@@YAXPEAUImFont@@@Z) [D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj]
+D:\repos\neostrafe_cpp\neostrafe_cpp\x64\Release\neostrafe_cpp.exe : fatal error LNK1120: 5 unresolved externals [D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj]
+Done Building Project "D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj" (default targets) -- FAILED.
+
+Build FAILED.
+
+"D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj" (default target) (1) ->
+(Link target) -> 
+  AppWindow.obj : error LNK2001: unresolved external symbol "void __cdecl ShowContextMenu(struct HWND__ *)" (?ShowContextMenu@@YAXPEAUHWND__@@@Z) [D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj]
+  GuiManager.obj : error LNK2001: unresolved external symbol "public: void __cdecl ImDrawList::AddText(struct ImFont const *,float,struct ImVec2 const &,unsigned int,char const *,char const *,float,struct ImVec4 const *)" (?AddText@ImDrawList@@QEAAXPEBUImFont@@MAEBUImVec2@@IPEBD2MPEBUImVec4@@@Z) [D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj]
+  GuiManager.obj : error LNK2001: unresolved external symbol "public: void __cdecl ImDrawList::AddRectFilledMultiColorRounded(struct ImVec2 const &,struct ImVec2 const &,unsigned int,unsigned int,unsigned int,unsigned int,unsigned int,float,int)" (?AddRectFilledMultiColorRounded@ImDrawList@@QEAAXAEBUImVec2@@0IIIIIMH@Z) [D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj]
+  GuiManager.obj : error LNK2001: unresolved external symbol "bool __cdecl ImGui::BeginChild(char const *,struct ImVec2 const &,bool,int)" (?BeginChild@ImGui@@YA_NPEBDAEBUImVec2@@_NH@Z) [D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj]
+  GuiManager.obj : error LNK2001: unresolved external symbol "void __cdecl ImGui::PushFont(struct ImFont *)" (?PushFont@ImGui@@YAXPEAUImFont@@@Z) [D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj]
+  D:\repos\neostrafe_cpp\neostrafe_cpp\x64\Release\neostrafe_cpp.exe : fatal error LNK1120: 5 unresolved externals [D:\repos\neostrafe_cpp\neostrafe_cpp\neostrafe_cpp.vcxproj]
+
+    0 Warning(s)
+    6 Error(s)
+
+Time Elapsed 00:00:01.13
