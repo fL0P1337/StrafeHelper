@@ -1,5 +1,6 @@
 // gui/GuiManager.cpp
 #include "GuiManager.h"
+#include "../Application.h"
 #include "../Config.h"
 #include "../Globals.h"
 #include "../Logger.h"
@@ -332,6 +333,27 @@ void GuiManager::RenderConfigContent() {
   }
 
   ImGui::PopItemWidth();
+
+  ImGui::Spacing();
+  ImGui::TextDisabled("Input Backend");
+  ImGui::Separator();
+  {
+    int backend = Config::SelectedBackend.load();
+    bool changed = false;
+    if (ImGui::RadioButton("WinHook (default)", &backend, 0))
+      changed = true;
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Interception", &backend, 1))
+      changed = true;
+    if (changed) {
+      Config::SelectedBackend.store(backend);
+      SwitchBackend(static_cast<Config::InputBackendKind>(backend));
+    }
+    if (backend == 1) {
+      ImGui::TextDisabled("  Requires interception.dll installed on system");
+    }
+  }
+
   ImGui::PopStyleVar(2);
 }
 

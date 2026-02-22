@@ -6,6 +6,13 @@
 #include <tchar.h> // For TCHAR
 
 namespace Config {
+
+// --- Input Backend Selection ---
+enum class InputBackendKind : int {
+  KbdHook = 0,      // WH_KEYBOARD_LL hook (default, no extra driver needed)
+  Interception = 1, // Interception kernel driver (requires interception.dll)
+};
+
 // Application Info
 extern const char APP_NAME[];
 extern const char VERSION[];
@@ -22,6 +29,9 @@ extern std::atomic<bool> IsLocked;      // Feature toggle
 extern std::atomic<bool> EnableSpam;    // Master spam switch
 extern std::atomic<bool> EnableSnapTap; // SnapTap / SOCD filtering
 extern std::atomic<int> KeySpamTrigger; // VK Code
+
+// Input backend (persisted as integer 0=KbdHook, 1=Interception)
+extern std::atomic<int> SelectedBackend;
 
 // Turbo Loot
 extern std::atomic<bool> EnableTurboLoot;

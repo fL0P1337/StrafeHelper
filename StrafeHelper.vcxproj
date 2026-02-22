@@ -143,6 +143,9 @@
     <ClInclude Include="AppWindow.h" />
     <ClInclude Include="Config.h" />
     <ClInclude Include="Globals.h" />
+    <ClInclude Include="InputBackend.h" />
+    <ClInclude Include="InterceptionBackend.h" />
+    <ClInclude Include="KbdHookBackend.h" />
     <ClInclude Include="KeyboardHook.h" />
     <ClInclude Include="SpamLogic.h" />
     <ClInclude Include="TurboLogic.h" />
@@ -162,6 +165,8 @@
     <ClCompile Include="Application.cpp" />
     <ClCompile Include="AppWindow.cpp" />
     <ClCompile Include="Config.cpp" />
+    <ClCompile Include="InterceptionBackend.cpp" />
+    <ClCompile Include="KbdHookBackend.cpp" />
     <ClCompile Include="KeyboardHook.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="SpamLogic.cpp" />

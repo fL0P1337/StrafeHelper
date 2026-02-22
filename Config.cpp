@@ -35,6 +35,9 @@ std::atomic<int> TurboJumpKey{0x20}; // VK_SPACE
 std::atomic<int> TurboJumpDelayMs{15};
 std::atomic<int> TurboJumpDurationMs{5};
 
+// Input backend (0 = KbdHook default)
+std::atomic<int> SelectedBackend{0};
+
 // --- Implementation of LoadConfig ---
 void LoadConfig() {
   std::ifstream configFile(CONFIG_FILE_NAME);
@@ -130,6 +133,11 @@ void LoadConfig() {
         TurboJumpDelayMs = std::stoi(value);
       else if (key == "turbo_jump_duration")
         TurboJumpDurationMs = std::stoi(value);
+      else if (key == "input_backend") {
+        int v = std::stoi(value);
+        // Clamp to valid range; unknown values default to KbdHook
+        SelectedBackend = (v == 1) ? 1 : 0;
+      }
     } catch (const std::exception &e) {
       Logger::GetInstance().Log("Warning: Invalid config value on line " +
                                 std::to_string(lineNumber) + " for key '" +
@@ -223,6 +231,7 @@ void SaveConfig() {
       {"turbo_jump_key", turboJumpKeyStr, false},
       {"turbo_jump_delay", turboJumpDelayStr, false},
       {"turbo_jump_duration", turboJumpDurStr, false},
+      {"input_backend", std::to_string(SelectedBackend.load()), false},
   };
 
   auto trim = [](std::string &s) {
