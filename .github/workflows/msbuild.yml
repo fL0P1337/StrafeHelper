@@ -22,8 +22,8 @@ jobs:
       uses: microsoft/setup-msbuild@v2
 
     - name: Restore NuGet packages
-      run: nuget restore neostrafe_cpp.sln
+      run: nuget restore StrafeHelper.sln
       continue-on-error: true
 
     - name: Build
-      run: msbuild /m /p:Configuration=${{ matrix.configuration }} /p:Platform=${{ matrix.platform }} neostrafe_cpp.sln
+      run: msbuild /m /p:Configuration=${{ matrix.configuration }} /p:Platform=${{ matrix.platform }} StrafeHelper.sln
