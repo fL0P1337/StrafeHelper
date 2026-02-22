@@ -214,10 +214,24 @@ void GuiManager::Render() {
 
 void GuiManager::RenderConfigContent() {
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 4));
-  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 8));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
 
-  // Slider width = 45% of available content region (bounded by child window)
-  ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.45f);
+  // Macro that renders a slider in the reference style:
+  //   Label ................ value
+  //   [========== bar ==========]
+#define FULL_SLIDER_INT(label, var, vmin, vmax, fmt, saveFn)                   \
+  do {                                                                         \
+    char _vbuf[16];                                                            \
+    ImGui::Text("%s", label);                                                  \
+    snprintf(_vbuf, sizeof(_vbuf), fmt, (var));                                \
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x -                         \
+                    ImGui::CalcTextSize(_vbuf).x);                             \
+    ImGui::TextDisabled("%s", _vbuf);                                          \
+    ImGui::SetNextItemWidth(-FLT_MIN);                                         \
+    if (ImGui::SliderInt("##" label, &(var), vmin, vmax, "")) {                \
+      saveFn;                                                                  \
+    }                                                                          \
+  } while (false)
 
   // Helper: resolve VK code to a readable key name
   auto VkToName = [](int vk, char *buf, int bufSize) {
@@ -270,16 +284,13 @@ void GuiManager::RenderConfigContent() {
 
   if (useSpam) {
     int delay = Config::SpamDelayMs.load();
-    if (ImGui::SliderInt("Spam Delay", &delay, 1, 100, "%dms")) {
-      Config::SpamDelayMs.store(delay);
-      Config::SaveConfig();
-    }
+    FULL_SLIDER_INT("Spam Delay", delay, 1, 100, "%dms",
+                    (Config::SpamDelayMs.store(delay), Config::SaveConfig()));
 
     int duration = Config::SpamKeyDownDurationMs.load();
-    if (ImGui::SliderInt("Hold Duration", &duration, 0, 50, "%dms")) {
-      Config::SpamKeyDownDurationMs.store(duration);
-      Config::SaveConfig();
-    }
+    FULL_SLIDER_INT(
+        "Hold Duration", duration, 0, 50, "%dms",
+        (Config::SpamKeyDownDurationMs.store(duration), Config::SaveConfig()));
 
     RebindButton("Trigger Key", m_isRebinding, Config::KeySpamTrigger);
   }
@@ -302,16 +313,14 @@ void GuiManager::RenderConfigContent() {
 
   if (useTurboLoot) {
     int lootDelay = Config::TurboLootDelayMs.load();
-    if (ImGui::SliderInt("Loot Spam Delay", &lootDelay, 1, 100, "%dms")) {
-      Config::TurboLootDelayMs.store(lootDelay);
-      Config::SaveConfig();
-    }
+    FULL_SLIDER_INT(
+        "Loot Spam Delay", lootDelay, 1, 100, "%dms",
+        (Config::TurboLootDelayMs.store(lootDelay), Config::SaveConfig()));
 
     int lootDuration = Config::TurboLootDurationMs.load();
-    if (ImGui::SliderInt("Loot Hold Duration", &lootDuration, 0, 50, "%dms")) {
-      Config::TurboLootDurationMs.store(lootDuration);
-      Config::SaveConfig();
-    }
+    FULL_SLIDER_INT("Loot Hold Duration", lootDuration, 0, 50, "%dms",
+                    (Config::TurboLootDurationMs.store(lootDuration),
+                     Config::SaveConfig()));
 
     RebindButton("Loot Key", m_isRebindingLootKey, Config::TurboLootKey);
   }
@@ -324,21 +333,19 @@ void GuiManager::RenderConfigContent() {
 
   if (useTurboJump) {
     int jumpDelay = Config::TurboJumpDelayMs.load();
-    if (ImGui::SliderInt("Jump Spam Delay", &jumpDelay, 1, 100, "%dms")) {
-      Config::TurboJumpDelayMs.store(jumpDelay);
-      Config::SaveConfig();
-    }
+    FULL_SLIDER_INT(
+        "Jump Spam Delay", jumpDelay, 1, 100, "%dms",
+        (Config::TurboJumpDelayMs.store(jumpDelay), Config::SaveConfig()));
 
     int jumpDuration = Config::TurboJumpDurationMs.load();
-    if (ImGui::SliderInt("Jump Hold Duration", &jumpDuration, 0, 50, "%dms")) {
-      Config::TurboJumpDurationMs.store(jumpDuration);
-      Config::SaveConfig();
-    }
+    FULL_SLIDER_INT("Jump Hold Duration", jumpDuration, 0, 50, "%dms",
+                    (Config::TurboJumpDurationMs.store(jumpDuration),
+                     Config::SaveConfig()));
 
     RebindButton("Jump Key", m_isRebindingJumpKey, Config::TurboJumpKey);
   }
 
-  ImGui::PopItemWidth();
+#undef FULL_SLIDER_INT
 
   ImGui::Spacing();
   ImGui::TextDisabled("Input Backend");
