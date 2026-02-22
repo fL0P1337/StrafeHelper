@@ -122,11 +122,8 @@ void GuiManager::Render() {
     auto pos = ImGui::GetWindowPos();
     auto size = ImGui::GetWindowSize();
 
-    // Draw full window background first to eliminate any gaps
-    draw->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y),
-                        ImColor(20, 20, 26), 0.0f);
-
-    // Draw title bar area
+    // Title bar area only — no full-window manual background needed
+    // (ImGui's WindowBg handles the main background via ClearRenderTargetView)
     draw->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + 51),
                         ImColor(24, 24, 24), 0.0f);
 
@@ -175,9 +172,13 @@ void GuiManager::Render() {
 
     ImGui::PushFont(m_fontMedium);
 
+    // Content area below title bar, with margins. Transparent child
+    // constrains the content region width without drawing a visible panel.
     ImGui::SetCursorPos({15, 65});
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
     ImGui::BeginChild("MainContent", ImVec2(size.x - 30, size.y - 80), false,
-                      ImGuiWindowFlags_NoScrollbar);
+                      ImGuiWindowFlags_NoScrollbar |
+                          ImGuiWindowFlags_NoScrollWithMouse);
 
     if (m_currentTab == TabSelection::CONFIG) {
       RenderConfigContent();
@@ -188,6 +189,7 @@ void GuiManager::Render() {
     }
 
     ImGui::EndChild();
+    ImGui::PopStyleColor();
     ImGui::PopFont();
   }
   ImGui::End();
@@ -207,6 +209,49 @@ void GuiManager::RenderConfigContent() {
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 4));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 8));
 
+  // Slider width = 45% of available content region (bounded by child window)
+  ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.45f);
+
+  // Helper: resolve VK code to a readable key name
+  auto VkToName = [](int vk, char *buf, int bufSize) {
+    UINT sc = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
+    if (sc != 0) {
+      GetKeyNameTextA((sc << 16), buf, bufSize);
+    } else {
+      sprintf_s(buf, bufSize, "VK %d", vk);
+    }
+  };
+
+  // Helper: generic key rebind button
+  auto RebindButton = [&](const char *label, bool &rebinding,
+                          std::atomic<int> &target) {
+    if (rebinding) {
+      ImGui::Button("Press any key...", ImVec2(150, 0));
+      ImGui::SameLine();
+      ImGui::TextDisabled("%s", label);
+      for (int i = 1; i < 256; i++) {
+        if (i == VK_LBUTTON || i == VK_RBUTTON || i == VK_ESCAPE)
+          continue;
+        if (GetAsyncKeyState(i) & 0x8000) {
+          target.store(i);
+          Config::SaveConfig();
+          Logger::GetInstance().Log(std::string("Rebound ") + label +
+                                    " to VK " + std::to_string(i));
+          rebinding = false;
+          break;
+        }
+      }
+    } else {
+      char keyName[64] = "Unknown Key";
+      VkToName(target.load(), keyName, sizeof(keyName));
+      if (ImGui::Button(keyName, ImVec2(150, 0))) {
+        rebinding = true;
+      }
+      ImGui::SameLine();
+      ImGui::TextDisabled("%s", label);
+    }
+  };
+
   ImGui::TextDisabled("Features");
   ImGui::Separator();
 
@@ -216,6 +261,22 @@ void GuiManager::RenderConfigContent() {
     Config::SaveConfig();
   }
 
+  if (useSpam) {
+    int delay = Config::SpamDelayMs.load();
+    if (ImGui::SliderInt("Spam Delay", &delay, 1, 100, "%dms")) {
+      Config::SpamDelayMs.store(delay);
+      Config::SaveConfig();
+    }
+
+    int duration = Config::SpamKeyDownDurationMs.load();
+    if (ImGui::SliderInt("Hold Duration", &duration, 0, 50, "%dms")) {
+      Config::SpamKeyDownDurationMs.store(duration);
+      Config::SaveConfig();
+    }
+
+    RebindButton("Trigger Key", m_isRebinding, Config::KeySpamTrigger);
+  }
+
   bool useSnapTap = Config::EnableSnapTap.load();
   if (ImGui::Checkbox("Enable SnapTap (SOCD)", &useSnapTap)) {
     Config::EnableSnapTap.store(useSnapTap);
@@ -223,57 +284,54 @@ void GuiManager::RenderConfigContent() {
   }
 
   ImGui::Spacing();
-  ImGui::TextDisabled("Delay Config");
+  ImGui::TextDisabled("Turbo Functions");
   ImGui::Separator();
 
-  ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.5f);
-  int delay = Config::SpamDelayMs.load();
-  if (ImGui::SliderInt("Spam Delay", &delay, 1, 100, "%dms")) {
-    Config::SpamDelayMs.store(delay);
+  bool useTurboLoot = Config::EnableTurboLoot.load();
+  if (ImGui::Checkbox("Enable Turbo Loot", &useTurboLoot)) {
+    Config::EnableTurboLoot.store(useTurboLoot);
     Config::SaveConfig();
   }
 
-  ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.5f);
-  int duration = Config::SpamKeyDownDurationMs.load();
-  if (ImGui::SliderInt("Hold Duration", &duration, 0, 50, "%dms")) {
-    Config::SpamKeyDownDurationMs.store(duration);
+  if (useTurboLoot) {
+    int lootDelay = Config::TurboLootDelayMs.load();
+    if (ImGui::SliderInt("Loot Spam Delay", &lootDelay, 1, 100, "%dms")) {
+      Config::TurboLootDelayMs.store(lootDelay);
+      Config::SaveConfig();
+    }
+
+    int lootDuration = Config::TurboLootDurationMs.load();
+    if (ImGui::SliderInt("Loot Hold Duration", &lootDuration, 0, 50, "%dms")) {
+      Config::TurboLootDurationMs.store(lootDuration);
+      Config::SaveConfig();
+    }
+
+    RebindButton("Loot Key", m_isRebindingLootKey, Config::TurboLootKey);
+  }
+
+  bool useTurboJump = Config::EnableTurboJump.load();
+  if (ImGui::Checkbox("Enable Turbo Jump", &useTurboJump)) {
+    Config::EnableTurboJump.store(useTurboJump);
     Config::SaveConfig();
   }
 
-  ImGui::Spacing();
-  ImGui::TextDisabled("Trigger Key");
-  ImGui::Separator();
-
-  int currentTrigger = Config::KeySpamTrigger.load();
-  if (m_isRebinding) {
-    ImGui::Button("Press any key...", ImVec2(150, 0));
-    for (int i = 1; i < 256; i++) {
-      // Exclude left/right mouse and escape and WASD
-      if (i == VK_LBUTTON || i == VK_RBUTTON || i == VK_ESCAPE || i == 'W' ||
-          i == 'A' || i == 'S' || i == 'D')
-        continue;
-      if (GetAsyncKeyState(i) & 0x8000) {
-        Config::KeySpamTrigger.store(i);
-        Config::SaveConfig();
-        Logger::GetInstance().Log("Rebound trigger to VK " + std::to_string(i));
-        m_isRebinding = false;
-        break;
-      }
-    }
-  } else {
-    UINT scanCode = MapVirtualKeyA(currentTrigger, MAPVK_VK_TO_VSC);
-    char keyName[64] = "Unknown Key";
-    if (scanCode != 0) {
-      GetKeyNameTextA((scanCode << 16), keyName, sizeof(keyName));
-    } else {
-      sprintf_s(keyName, sizeof(keyName), "VK %d", currentTrigger);
+  if (useTurboJump) {
+    int jumpDelay = Config::TurboJumpDelayMs.load();
+    if (ImGui::SliderInt("Jump Spam Delay", &jumpDelay, 1, 100, "%dms")) {
+      Config::TurboJumpDelayMs.store(jumpDelay);
+      Config::SaveConfig();
     }
 
-    if (ImGui::Button(keyName, ImVec2(150, 0))) {
-      m_isRebinding = true;
+    int jumpDuration = Config::TurboJumpDurationMs.load();
+    if (ImGui::SliderInt("Jump Hold Duration", &jumpDuration, 0, 50, "%dms")) {
+      Config::TurboJumpDurationMs.store(jumpDuration);
+      Config::SaveConfig();
     }
+
+    RebindButton("Jump Key", m_isRebindingJumpKey, Config::TurboJumpKey);
   }
 
+  ImGui::PopItemWidth();
   ImGui::PopStyleVar(2);
 }
 
@@ -332,10 +390,10 @@ void GuiManager::ApplyDarkTheme() {
 
   // Unified dark background - consistent across all elements
   const ImVec4 bgColor = ImVec4(0.08f, 0.08f, 0.10f, 1.00f);
-  const ImVec4 childBgColor = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
 
   style.Colors[ImGuiCol_WindowBg] = bgColor;
-  style.Colors[ImGuiCol_ChildBg] = childBgColor;
+  style.Colors[ImGuiCol_ChildBg] =
+      ImVec4(0.0f, 0.0f, 0.0f, 0.0f); // transparent — inherits parent
   style.Colors[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.08f, 0.10f, 0.95f);
   // Set border to match background to eliminate any white lines
   style.Colors[ImGuiCol_Border] = ImVec4(0.08f, 0.08f, 0.10f, 0.00f);

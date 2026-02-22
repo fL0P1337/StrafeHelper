@@ -5,6 +5,7 @@
 #include "Globals.h"
 #include "KeyboardHook.h"
 #include "SpamLogic.h"
+#include "TurboLogic.h"
 #include "Utils.h"
 #include <iostream>
 #include <map>    // <-- Add
@@ -18,6 +19,10 @@ HWND g_hWindow = NULL;
 HANDLE g_hHookThread = NULL;
 HANDLE g_hSpamThread = NULL;
 HANDLE g_hSpamEvent = NULL;
+HANDLE g_hTurboLootThread = NULL;
+HANDLE g_hTurboLootEvent = NULL;
+HANDLE g_hTurboJumpThread = NULL;
+HANDLE g_hTurboJumpEvent = NULL;
 HINSTANCE g_hInstance = NULL;
 
 // Need full types here since it's the definition
@@ -58,6 +63,20 @@ bool InitializeApplication(HINSTANCE hInstance) {
     return false;
   }
 
+  Globals::g_hTurboLootEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+  Globals::g_hTurboJumpEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+  if (!Globals::g_hTurboLootEvent || !Globals::g_hTurboJumpEvent) {
+    LogError("CreateEvent for turbo failed");
+    if (Globals::g_hSpamEvent)
+      CloseHandle(Globals::g_hSpamEvent);
+    if (Globals::g_hTurboLootEvent)
+      CloseHandle(Globals::g_hTurboLootEvent);
+    if (Globals::g_hTurboJumpEvent)
+      CloseHandle(Globals::g_hTurboJumpEvent);
+    DeleteCriticalSection(&Globals::g_csActiveKeys);
+    return false;
+  }
+
   // Window creation moved to GuiManager inside main.cpp, but tray icon might
   // still rely on it. We will keep CreateAppWindow as a hidden message window
   // for Tray/Internal events.
@@ -74,6 +93,15 @@ bool InitializeApplication(HINSTANCE hInstance) {
   int triggerKey = Config::KeySpamTrigger.load();
   if (Globals::g_KeyInfo.find(triggerKey) == Globals::g_KeyInfo.end()) {
     Globals::g_KeyInfo[triggerKey];
+  }
+  // Register turbo keys
+  int lootKey = Config::TurboLootKey.load();
+  if (Globals::g_KeyInfo.find(lootKey) == Globals::g_KeyInfo.end()) {
+    Globals::g_KeyInfo[lootKey];
+  }
+  int jumpKey = Config::TurboJumpKey.load();
+  if (Globals::g_KeyInfo.find(jumpKey) == Globals::g_KeyInfo.end()) {
+    Globals::g_KeyInfo[jumpKey];
   }
   std::cout << "Key states initialized." << std::endl;
 
@@ -99,10 +127,15 @@ bool InitializeApplication(HINSTANCE hInstance) {
       DestroyWindow(Globals::g_hWindow);
     UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
     CloseHandle(Globals::g_hSpamEvent);
+    CloseHandle(Globals::g_hTurboLootEvent);
+    CloseHandle(Globals::g_hTurboJumpEvent);
     DeleteCriticalSection(&Globals::g_csActiveKeys);
     Globals::g_hSpamEvent = NULL;
     return false;
   }
+
+  StartTurboLootThread();
+  StartTurboJumpThread();
 
   std::cout << "Application Initialization Successful." << std::endl;
   return true;
@@ -112,6 +145,8 @@ void CleanupApplication() {
   std::cout << "--- Starting Application Cleanup ---" << std::endl;
 
   StopSpamThread();
+  StopTurboLootThread();
+  StopTurboJumpThread();
 
   if (Globals::g_hHookThread) {
     PostThreadMessage(GetThreadId(Globals::g_hHookThread), WM_QUIT, 0, 0);
@@ -130,6 +165,14 @@ void CleanupApplication() {
     CloseHandle(Globals::g_hSpamEvent);
     Globals::g_hSpamEvent = NULL;
     std::cout << "Spam event handle closed." << std::endl;
+  }
+  if (Globals::g_hTurboLootEvent) {
+    CloseHandle(Globals::g_hTurboLootEvent);
+    Globals::g_hTurboLootEvent = NULL;
+  }
+  if (Globals::g_hTurboJumpEvent) {
+    CloseHandle(Globals::g_hTurboJumpEvent);
+    Globals::g_hTurboJumpEvent = NULL;
   }
 
   DeleteCriticalSection(&Globals::g_csActiveKeys);

@@ -23,6 +23,18 @@ std::atomic<bool> EnableSpam{true};
 std::atomic<bool> EnableSnapTap{true};
 std::atomic<int> KeySpamTrigger{'C'}; // VK_KEY 'C'
 
+// Turbo Loot
+std::atomic<bool> EnableTurboLoot{false};
+std::atomic<int> TurboLootKey{0x45}; // 'E'
+std::atomic<int> TurboLootDelayMs{15};
+std::atomic<int> TurboLootDurationMs{5};
+
+// Turbo Jump
+std::atomic<bool> EnableTurboJump{false};
+std::atomic<int> TurboJumpKey{0x20}; // VK_SPACE
+std::atomic<int> TurboJumpDelayMs{15};
+std::atomic<int> TurboJumpDurationMs{5};
+
 // --- Implementation of LoadConfig ---
 void LoadConfig() {
   std::ifstream configFile(CONFIG_FILE_NAME);
@@ -100,6 +112,24 @@ void LoadConfig() {
           }
         }
       }
+      // Turbo Loot
+      else if (key == "enable_turbo_loot")
+        EnableTurboLoot = (value == "true" || value == "1");
+      else if (key == "turbo_loot_key")
+        TurboLootKey = std::stoi(value);
+      else if (key == "turbo_loot_delay")
+        TurboLootDelayMs = std::stoi(value);
+      else if (key == "turbo_loot_duration")
+        TurboLootDurationMs = std::stoi(value);
+      // Turbo Jump
+      else if (key == "enable_turbo_jump")
+        EnableTurboJump = (value == "true" || value == "1");
+      else if (key == "turbo_jump_key")
+        TurboJumpKey = std::stoi(value);
+      else if (key == "turbo_jump_delay")
+        TurboJumpDelayMs = std::stoi(value);
+      else if (key == "turbo_jump_duration")
+        TurboJumpDurationMs = std::stoi(value);
     } catch (const std::exception &e) {
       Logger::GetInstance().Log("Warning: Invalid config value on line " +
                                 std::to_string(lineNumber) + " for key '" +
@@ -125,7 +155,22 @@ void LoadConfig() {
             std::string(EnableSnapTap.load() ? "true" : "false") + "\n";
   logMsg += "  KEY_SPAM_TRIGGER: " +
             std::string(1, static_cast<char>(KeySpamTrigger.load())) +
-            " (VK: " + std::to_string(KeySpamTrigger.load()) + ")";
+            " (VK: " + std::to_string(KeySpamTrigger.load()) + ")\n";
+  logMsg += "  enable_turbo_loot: " +
+            std::string(EnableTurboLoot.load() ? "true" : "false") + "\n";
+  logMsg += "  turbo_loot_key: " + std::to_string(TurboLootKey.load()) + "\n";
+  logMsg +=
+      "  turbo_loot_delay: " + std::to_string(TurboLootDelayMs.load()) + "\n";
+  logMsg +=
+      "  turbo_loot_duration: " + std::to_string(TurboLootDurationMs.load()) +
+      "\n";
+  logMsg += "  enable_turbo_jump: " +
+            std::string(EnableTurboJump.load() ? "true" : "false") + "\n";
+  logMsg += "  turbo_jump_key: " + std::to_string(TurboJumpKey.load()) + "\n";
+  logMsg +=
+      "  turbo_jump_delay: " + std::to_string(TurboJumpDelayMs.load()) + "\n";
+  logMsg +=
+      "  turbo_jump_duration: " + std::to_string(TurboJumpDurationMs.load());
   Logger::GetInstance().Log(logMsg);
 }
 
@@ -136,6 +181,16 @@ void SaveConfig() {
   const std::string enableSpamStr = EnableSpam.load() ? "true" : "false";
   const std::string snapTapStr = EnableSnapTap.load() ? "true" : "false";
   const std::string triggerStr(1, static_cast<char>(KeySpamTrigger.load()));
+  const std::string turboLootStr = EnableTurboLoot.load() ? "true" : "false";
+  const std::string turboLootKeyStr = std::to_string(TurboLootKey.load());
+  const std::string turboLootDelayStr = std::to_string(TurboLootDelayMs.load());
+  const std::string turboLootDurStr =
+      std::to_string(TurboLootDurationMs.load());
+  const std::string turboJumpStr = EnableTurboJump.load() ? "true" : "false";
+  const std::string turboJumpKeyStr = std::to_string(TurboJumpKey.load());
+  const std::string turboJumpDelayStr = std::to_string(TurboJumpDelayMs.load());
+  const std::string turboJumpDurStr =
+      std::to_string(TurboJumpDurationMs.load());
 
   // Update-in-place: preserve unknown keys/comments, replace known keys, append
   // missing ones.
@@ -160,6 +215,14 @@ void SaveConfig() {
       {"enable_spam", enableSpamStr, false},
       {"enable_snaptap", snapTapStr, false},
       {"KEY_SPAM_TRIGGER", triggerStr, false},
+      {"enable_turbo_loot", turboLootStr, false},
+      {"turbo_loot_key", turboLootKeyStr, false},
+      {"turbo_loot_delay", turboLootDelayStr, false},
+      {"turbo_loot_duration", turboLootDurStr, false},
+      {"enable_turbo_jump", turboJumpStr, false},
+      {"turbo_jump_key", turboJumpKeyStr, false},
+      {"turbo_jump_delay", turboJumpDelayStr, false},
+      {"turbo_jump_duration", turboJumpDurStr, false},
   };
 
   auto trim = [](std::string &s) {

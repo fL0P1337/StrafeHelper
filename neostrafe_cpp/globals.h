@@ -17,6 +17,10 @@ extern HWND g_hWindow;
 extern HANDLE g_hHookThread;
 extern HANDLE g_hSpamThread;
 extern HANDLE g_hSpamEvent;
+extern HANDLE g_hTurboLootThread;
+extern HANDLE g_hTurboLootEvent;
+extern HANDLE g_hTurboJumpThread;
+extern HANDLE g_hTurboJumpEvent;
 extern HINSTANCE g_hInstance;
 
 // --- State Management ---

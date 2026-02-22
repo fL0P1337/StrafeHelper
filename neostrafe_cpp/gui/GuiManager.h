@@ -51,6 +51,8 @@ private:
   bool m_showStateMonitor = true;
 
   bool m_isRebinding = false;
+  bool m_isRebindingLootKey = false;
+  bool m_isRebindingJumpKey = false;
 
   ImFont *m_fontMedium = nullptr;
   ImFont *m_fontSemiBold = nullptr;
