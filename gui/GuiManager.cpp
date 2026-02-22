@@ -175,11 +175,17 @@ void GuiManager::Render() {
 
     // Content area below title bar, with margins. Transparent child
     // constrains the content region width without drawing a visible panel.
+    // Config tab needs scrolling enabled so all controls are reachable.
     ImGui::SetCursorPos({15, 65});
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    const bool isConfigTab = (m_currentTab == TabSelection::CONFIG);
+    ImGuiWindowFlags childFlags =
+        isConfigTab
+            ? ImGuiWindowFlags_None // allow scroll + scrollbar on Config
+            : (ImGuiWindowFlags_NoScrollbar |
+               ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::BeginChild("MainContent", ImVec2(size.x - 30, size.y - 80), false,
-                      ImGuiWindowFlags_NoScrollbar |
-                          ImGuiWindowFlags_NoScrollWithMouse);
+                      childFlags);
 
     if (m_currentTab == TabSelection::CONFIG) {
       RenderConfigContent();
@@ -338,19 +344,126 @@ void GuiManager::RenderConfigContent() {
   ImGui::TextDisabled("Input Backend");
   ImGui::Separator();
   {
+    // --- Cached interception availability check (refresh once per second) ---
+    struct InterceptionStatus {
+      enum class State {
+        Unknown,
+        DllMissing,
+        DriverInactive,
+        Available
+      } state = State::Unknown;
+      DWORD lastCheckTick = 0;
+    };
+    static InterceptionStatus s_icStatus;
+
+    const DWORD now = GetTickCount();
+    if ((now - s_icStatus.lastCheckTick) > 1000u) {
+      s_icStatus.lastCheckTick = now;
+
+      // 1. Is interception.dll present next to the exe?
+      wchar_t exePath[MAX_PATH] = {};
+      GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+      for (int k = static_cast<int>(wcslen(exePath)); k >= 0; --k) {
+        if (exePath[k] == L'\\' || exePath[k] == L'/') {
+          exePath[k + 1] = L'\0';
+          break;
+        }
+      }
+      wchar_t dllPath[MAX_PATH] = {};
+      wcscpy_s(dllPath, exePath);
+      wcscat_s(dllPath, L"interception.dll");
+
+      const bool dllPresent =
+          (GetFileAttributesW(dllPath) != INVALID_FILE_ATTRIBUTES);
+
+      if (!dllPresent) {
+        s_icStatus.state = InterceptionStatus::State::DllMissing;
+      } else {
+        // 2. Try to create a driver context — confirms the kernel filter is
+        //    active. We LoadLibrary temporarily; drivers loaded in both the
+        //    target app and here share the same user-mode proxy so this is
+        //    safe.
+        HMODULE lib = LoadLibraryW(dllPath);
+        if (!lib) {
+          s_icStatus.state = InterceptionStatus::State::DriverInactive;
+        } else {
+          using CreateCtxFn = void *(*)();
+          using DestroyCtxFn = void (*)(void *);
+          auto createCtx = reinterpret_cast<CreateCtxFn>(
+              GetProcAddress(lib, "interception_create_context"));
+          auto destroyCtx = reinterpret_cast<DestroyCtxFn>(
+              GetProcAddress(lib, "interception_destroy_context"));
+          if (!createCtx || !destroyCtx) {
+            s_icStatus.state = InterceptionStatus::State::DriverInactive;
+          } else {
+            void *ctx = createCtx();
+            if (ctx) {
+              destroyCtx(ctx);
+              s_icStatus.state = InterceptionStatus::State::Available;
+            } else {
+              s_icStatus.state = InterceptionStatus::State::DriverInactive;
+            }
+          }
+          FreeLibrary(lib);
+        }
+      }
+    }
+
+    // --- Status badge ---
+    const char *icon = nullptr;
+    const char *statusText = nullptr;
+    ImVec4 statusColor{};
+    switch (s_icStatus.state) {
+    case InterceptionStatus::State::Available:
+      icon = "[  OK  ]";
+      statusText = "Interception driver ready";
+      statusColor = ImVec4(0.25f, 0.85f, 0.25f, 1.0f);
+      break;
+    case InterceptionStatus::State::DllMissing:
+      icon = "[  X   ]";
+      statusText = "interception.dll not found next to exe";
+      statusColor = ImVec4(0.90f, 0.30f, 0.30f, 1.0f);
+      break;
+    case InterceptionStatus::State::DriverInactive:
+      icon = "[  !   ]";
+      statusText = "DLL present but driver not installed / running";
+      statusColor = ImVec4(0.95f, 0.70f, 0.10f, 1.0f);
+      break;
+    default:
+      icon = "[  ?   ]";
+      statusText = "Checking...";
+      statusColor = ImVec4(0.55f, 0.55f, 0.55f, 1.0f);
+      break;
+    }
+    ImGui::TextColored(statusColor, "%s", icon);
+    ImGui::SameLine();
+    ImGui::TextColored(statusColor, "%s", statusText);
+    ImGui::Spacing();
+
+    // --- Radio buttons — Interception disabled if driver unavailable ---
+    const bool driverReady =
+        (s_icStatus.state == InterceptionStatus::State::Available);
+
     int backend = Config::SelectedBackend.load();
     bool changed = false;
     if (ImGui::RadioButton("WinHook (default)", &backend, 0))
       changed = true;
     ImGui::SameLine();
+    if (!driverReady)
+      ImGui::BeginDisabled();
     if (ImGui::RadioButton("Interception", &backend, 1))
       changed = true;
+    if (!driverReady)
+      ImGui::EndDisabled();
+
     if (changed) {
       Config::SelectedBackend.store(backend);
       SwitchBackend(static_cast<Config::InputBackendKind>(backend));
     }
-    if (backend == 1) {
-      ImGui::TextDisabled("  Requires interception.dll installed on system");
+
+    if (!driverReady && backend != 1) {
+      ImGui::TextDisabled(
+          "  Install Interception driver to enable this option.");
     }
   }
 
