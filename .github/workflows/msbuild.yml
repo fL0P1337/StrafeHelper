@@ -15,6 +15,10 @@ jobs:
         configuration: [Release]
         platform: [x64]
 
+    outputs:
+      # Pass the artifact path to the release job
+      exe_path: ${{ steps.locate.outputs.exe_path }}
+
     steps:
     - uses: actions/checkout@v4
 
@@ -27,3 +31,57 @@ jobs:
 
     - name: Build
       run: msbuild /m /p:Configuration=${{ matrix.configuration }} /p:Platform=${{ matrix.platform }} StrafeHelper.sln
+
+    - name: Locate binary
+      id: locate
+      shell: pwsh
+      run: |
+        $exe = "x64\${{ matrix.configuration }}\StrafeHelper.exe"
+        echo "exe_path=$exe" >> $env:GITHUB_OUTPUT
+
+    # Upload the binary so the release job can download it
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: StrafeHelper-${{ matrix.configuration }}-${{ matrix.platform }}
+        path: x64/${{ matrix.configuration }}/StrafeHelper.exe
+        if-no-files-found: error
+
+  release:
+    # Only publish a release on direct pushes to master, not on PRs
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write   # required to create releases and upload assets
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download build artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: StrafeHelper-Release-x64
+        path: dist/
+
+    - name: Build release metadata
+      id: meta
+      shell: bash
+      run: |
+        SHORT_SHA="${{ github.sha }}"
+        SHORT_SHA="${SHORT_SHA:0:7}"
+        echo "tag=v-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+        echo "name=StrafeHelper ${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+        # Use the full commit message (subject + body) as release body
+        git log -1 --pretty=format:"%B" >> release_body.txt
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.meta.outputs.tag }}
+        name: ${{ steps.meta.outputs.name }}
+        body_path: release_body.txt
+        files: dist/StrafeHelper.exe
+        make_latest: true
+
