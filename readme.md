@@ -1,7 +1,10 @@
 # StrafeHelper
+
+![StrafeHelper Showcase 1](showcase_1.jpg)
+
 ## Motivation
 
-The main motivation to create this project is stop p2c apps for macroing a such simple thing. By providing a transparent, open-source alternative, this project aims to level the playing field and offer a free solution for movement community.
+The main motivation to create this project is to stop pay-to-cheat apps for macroing a simple thing. By providing a transparent, open-source alternative, this project aims to level the playing field and offer a free solution for the movement community.
 
 ## Technical Details
 
@@ -11,24 +14,23 @@ The main motivation to create this project is stop p2c apps for macroing a such 
   - Uses the Win32 `SendInput` API for keyboard event injection.
   - Implements low-level keyboard hooks (`WH_KEYBOARD_LL`) to monitor physical key states without latency.
 - **Architecture**:
-  - **SpamLogic**: Handles the asynchronous timing and batching of simulated key presses.
+  - **SpamLogic & TurboLogic**: Handles the asynchronous timing and batching of simulated key presses.
   - **Config System**: Thread-safe loading and management of application parameters.
-  - **Tray Integration**: Minimalistic UI using the Windows system tray for real-time control.
+  - **GUI Integration**: A modern GUI layer powered by **Dear ImGui** over Win32 + DX11, completely isolated from the low-level keyboard hook to ensure zero-latency inputs while retaining a premium aesthetic.
 
-## Branches and Implementation Variants
+## Previews
 
-This repository contains different approaches to input handling:
-
-- **master**: The main branch containing the current stable implementation and core logic.
-- **structbased-kbdhook-impl**: A variant focusing on a structured approach using Windows Low-Level Keyboard Hooks (`SetWindowsHookEx`). This method is ideal for broad compatibility without requiring custom drivers.
-- **structbased-interception-impl**: An advanced variant that utilizes the **Interception Driver**. This allows for deeper interaction with the input stack, potentially bypassing certain software-level detection while providing even lower latency.
-- **structbased-1.0-kbdhook-impl**: A legacy/milestone branch for the initial structured keyboard hook implementation.
+<div align="center">
+  <img src="showcase_2.jpg" alt="StrafeHelper Showcase 2" width="45%" />
+  <img src="showcase_3.jpg" alt="StrafeHelper Showcase 3" width="45%" />
+</div>
 
 ## Features
 
+- **Modern UI**: Easily toggle features and monitor statuses through the stunning ImGui interface.
 - **WASD Strafing**: Synchronized, rapid key simulation for movement keys to enable perfect strafes.
-- **Dynamic Triggering**: Activation via a customizable trigger key (e.g., toggle or hold).
-- **In-Memory Configuration**: Settings can be modified in real-time through the tray icon or configuration file.
+- **Dynamic Triggering**: Activation via a customizable trigger key (e.g., toggle or hold) including modern conveniences like *SnapTap*.
+- **In-Memory Configuration**: Settings can be modified in real-time through the new ImGui Config Panel or directly via `config.cfg`.
 - **Low Footprint**: Optimized to ensure minimal CPU and memory usage during gameplay.
 
 ## Getting Started
@@ -40,17 +42,15 @@ This repository contains different approaches to input handling:
 
 ### Build Instructions
 
-1. Open the solution file in Visual Studio.
+1. Open `StrafeHelper.sln` in Visual Studio.
 2. Set the build configuration to **Release** and architecture to **x64**.
-3. Ensure the Project Subsystem is set to **Windows** (`/SUBSYSTEM:WINDOWS`) to avoid a console window popup (unless in Debug mode).
-4. Build the solution.
+3. Build the solution. The output binary will be located in the `x64/Release/` folder.
 
 ## Usage
 
-1. Run the compiled executable.
-2. An icon will appear in the system tray.
-3. Right-click the icon to toggle features or exit the application.
-4. Use the configured trigger key to activate the strafe logic in-game.
+1. Run the compiled executable `StrafeHelper.exe`.
+2. The modern GUI will launch. You can configure your keybinds visually, use the console, and monitor your physical and simulated outputs in the State Monitor.
+3. Use the configured trigger key to activate the strafe logic in-game.
 
 ## Disclaimer
 
