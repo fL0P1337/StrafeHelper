@@ -21,6 +21,8 @@ extern HANDLE g_hTurboLootThread;
 extern HANDLE g_hTurboLootEvent;
 extern HANDLE g_hTurboJumpThread;
 extern HANDLE g_hTurboJumpEvent;
+extern HANDLE g_hSuperglideThread;
+extern HANDLE g_hSuperglideEvent;
 extern HINSTANCE g_hInstance;
 
 // --- State Management ---

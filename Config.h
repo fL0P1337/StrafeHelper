@@ -45,6 +45,11 @@ extern std::atomic<int> TurboJumpKey; // VK code (default 0x20 = VK_SPACE)
 extern std::atomic<int> TurboJumpDelayMs;
 extern std::atomic<int> TurboJumpDurationMs;
 
+// Superglide
+extern std::atomic<bool> EnableSuperglide;
+extern std::atomic<int> SuperglideBind; // VK code (default 0xC0 = tilde ~)
+extern std::atomic<double> TargetFPS;
+
 // Function to load configuration
 void LoadConfig();
 void SaveConfig();

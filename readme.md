@@ -4,105 +4,142 @@
 
 ## Motivation
 
-The main motivation to create this project is to stop pay-to-cheat apps for macroing a simple thing. By providing a transparent, open-source alternative, this project aims to level the playing field and offer a free solution for the movement community.
+Stop paying for macro apps that do one simple thing. StrafeHelper is a transparent, open-source movement utility for the PC FPS community — free, auditable, and built to stay that way.
+
+---
+
+## Features
+
+| Feature | Description |
+|---|---|
+| **Macro Spam** | Rapid key cycling on WASD for strafing. Delay and hold-duration configurable. |
+| **SnapTap / SOCD** | Last-input-wins axis filtering — press both A+D and only the most-recent registers. |
+| **Turbo Loot** | Auto-repeats a loot key at configurable speed while held. |
+| **Turbo Jump** | Auto-repeats a jump key at configurable speed while held. |
+| **Superglide** | One-press automation of the Jump → (1 frame) → Crouch sequence with sub-millisecond QPC timing. |
+| **Dual Input Backends** | WH_KEYBOARD_LL hook (default) or Interception kernel driver, hot-switchable at runtime. |
+| **ImGui GUI** | Tabbed interface: Config, State Monitor, Console. All binds rebindable in-app. |
+
+---
+
+## Superglide
+
+Superglide automates the precise Jump + Crouch timing required to execute a superglide in Apex Legends (and similar titles).
+
+**How it works:**
+1. Press your designated Superglide bind.
+2. The bind is **silently suppressed** — the game never sees the physical keypress.
+3. StrafeHelper injects:
+   - **Jump** (Space)
+   - Wait exactly **1 frame** at your configured FPS
+   - **Crouch** (Left Ctrl)
+
+**Timing precision:**  
+Frame duration is computed as `freq / targetFPS` in QPC ticks (no integer truncation). A hybrid wait — coarse `Sleep(1)` + QPC spin for the final 0.5 ms — achieves sub-millisecond accuracy at any frame rate.
+
+**Config options (in-app or `config.cfg`):**
+
+| Key | Default | Description |
+|---|---|---|
+| `enable_superglide` | `false` | Master toggle |
+| `superglide_bind` | `192` (tilde `~`) | VK code of the trigger key |
+| `target_fps` | `60.0` | Game frame rate — determines 1-frame delay |
+
+A 500 ms cooldown after each execution prevents accidental re-trigger from key-hold repeat.
+
+---
+
+## Input Backends
+
+Both backends are selectable from the **Config** tab at runtime without restarting.
+
+### WinHook *(default)*
+
+`WH_KEYBOARD_LL` low-level keyboard hook. No driver required.
+
+| | |
+|---|---|
+| Driver required | ✗ |
+| Physical key suppression | ✗ (passthrough only) |
+
+### Interception *(optional)*
+
+Kernel-mode filter driver via [Interception](https://github.com/oblitum/Interception). Operates below the Windows input stack.
+
+| | |
+|---|---|
+| Driver required | ✓ [Interception driver](https://github.com/oblitum/Interception/releases) |
+| DLL required | ✓ `interception.dll` next to the exe |
+| Physical key suppression | ✓ |
+
+**Setup:** Install the driver, place `interception.dll` next to the exe, launch StrafeHelper. The Config tab shows a live status badge:
+
+| Badge | Color | Meaning |
+|---|---|---|
+| `[ OK ]` | Green | Driver ready |
+| `[ X ]` | Red | `interception.dll` not found |
+| `[ ! ]` | Amber | DLL present, driver not running |
+
+---
 
 ## Technical Details
 
-- **Language**: C++ (C++17 or later recommended).
-- **Concurrency**: Utilizes multi-threaded logic and atomic operations (`std::atomic`) for thread-safe configuration management and input handling.
-- **Input Simulation**:
-  - Uses the Win32 `SendInput` API for keyboard event injection.
-  - Supports two **pluggable input backends** (see below) for capturing physical key presses.
-- **Architecture**:
-  - **InputBackend interface**: An abstract layer (`InputBackend.h`) decouples device I/O from all higher-level processing. Both backends implement `Initialize`, `PollEvents`, `PassThrough`, `InjectKey`, and `Shutdown`.
-  - **SpamLogic & TurboLogic**: Handles the asynchronous timing and batching of simulated key presses.
-  - **Config System**: Thread-safe loading and management of application parameters.
-  - **GUI Integration**: A modern GUI layer powered by **Dear ImGui** over Win32 + DX11, completely isolated from the low-level keyboard hook to ensure zero-latency inputs while retaining a premium aesthetic.
+- **Language:** C++20 (MSVC v143)
+- **GUI:** Dear ImGui · Win32 + DirectX 11 backend · Inter font
+- **Threading:** One Win32 thread + auto-reset event per feature; atomic config shared across threads
+- **Timing:** `QueryPerformanceFrequency` / `QueryPerformanceCounter` for frame-accurate sleep; `timeBeginPeriod(1)` for coarse sleep resolution
+- **Injection:** `SendInput` with `KEYEVENTF_SCANCODE`; synthetic events tagged with `NEO_SYNTHETIC_INFORMATION` to avoid re-entrant processing
+
+### Architecture
+
+```
+InputBackend (abstract)
+├── KbdHookBackend   — WH_KEYBOARD_LL hook thread → event queue → PollEvents
+└── InterceptionBackend — Interception driver polling thread → event queue → PollEvents
+
+Application
+├── DispatchKeyEvent  — routes Interception events to feature handlers
+├── KeyboardProc      — routes WinHook events to feature handlers
+└── Feature threads (Win32 HANDLE + Event)
+    ├── SpamLogic
+    ├── TurboLogic (Loot + Jump)
+    └── SuperglideLogic
+
+Gui::GuiManager  — ImGui render loop (Config / Monitor / Console tabs)
+Config namespace — atomic<T> vars + LoadConfig / SaveConfig (key=value file)
+```
+
+---
+
+## Build
+
+1. Open **Visual Studio 2022** (v143 toolset).
+2. Open `StrafeHelper.sln`.
+3. Set configuration to **Release | x64**.
+4. Build — output at `x64/Release/StrafeHelper.exe`.
+
+Or from PowerShell:
+
+```powershell
+$msbuild = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\Community\MSBuild" -Recurse -Filter "MSBuild.exe" | Select-Object -First 1 -ExpandProperty FullName
+& $msbuild StrafeHelper.sln /p:Configuration=Release /p:Platform=x64 /m
+```
+
+---
 
 ## Previews
 
 <div align="center">
-  <img src="showcase_2.jpg" alt="StrafeHelper Showcase 2" width="45%" />
-  <img src="showcase_3.jpg" alt="StrafeHelper Showcase 3" width="45%" />
+  <img src="showcase_2.jpg" alt="Config Tab" width="45%" />
+  <img src="showcase_3.jpg" alt="State Monitor" width="45%" />
 </div>
 
-## Features
-
-- **Modern UI**: Easily toggle features and monitor statuses through the stunning ImGui interface.
-- **WASD Strafing**: Synchronized, rapid key simulation for movement keys to enable perfect strafes.
-- **Dynamic Triggering**: Activation via a customizable trigger key (e.g., toggle or hold) including modern conveniences like *SnapTap*.
-- **In-Memory Configuration**: Settings can be modified in real-time through the new ImGui Config Panel or directly via `config.cfg`.
-- **Low Footprint**: Optimized to ensure minimal CPU and memory usage during gameplay.
-- **Dual Input Backends**: Runtime-switchable keyboard capture with live availability status in the UI.
-
-## Input Backends
-
-StrafeHelper supports two keyboard capture backends, selectable at runtime from the **Config** tab without restarting the application.
-
-### WinHook *(default)*
-
-Uses the Windows `WH_KEYBOARD_LL` low-level keyboard hook. Works on any system with no additional drivers required. This is the default and recommended mode for most users.
-
-| | |
-|---|---|
-| Requires driver | ✗ No |
-| Can suppress physical keys | ✗ No (uses `CallNextHookEx`) |
-| Availability | Always |
-
-### Interception *(optional)*
-
-Uses the [Interception](https://github.com/oblitum/Interception) kernel-mode keyboard filter driver, loaded dynamically at runtime via `interception.dll`. Operates below the Windows input stack, giving reliable low-level access without hook latency.
-
-| | |
-|---|---|
-| Requires driver | ✓ Yes — [Interception driver](https://github.com/oblitum/Interception) must be installed |
-| Requires DLL | ✓ `interception.dll` (or `interception64.dll`) next to the exe |
-| Can suppress physical keys | ✓ Yes |
-| Availability | Only when driver is installed and running |
-
-#### Installing the Interception driver
-
-1. Download and install the [Interception driver](https://github.com/oblitum/Interception/releases).
-2. Place `interception.dll` in the same folder as `StrafeHelper.exe`.
-3. Launch StrafeHelper — the Config tab will show **`[ OK ] Interception driver ready`** in green when everything is detected correctly.
-
-#### Live status indicator
-
-The Input Backend section shows a color-coded status badge that updates every second:
-
-| Badge | Color | Meaning |
-|-------|-------|---------|
-| `[ OK ]` | Green | Driver installed, DLL found, context opens successfully |
-| `[ X ]` | Red | `interception.dll` not found next to the exe |
-| `[ ! ]` | Amber | DLL present but the kernel driver is not running |
-
-The **Interception** radio button is automatically grayed out when the driver is not available.
-
-## Getting Started
-
-### Prerequisites
-
-- Visual Studio 2022 or a compatible C++ compiler.
-- Windows SDK.
-
-### Build Instructions
-
-1. Open `StrafeHelper.sln` in Visual Studio.
-2. Set the build configuration to **Release** and architecture to **x64**.
-3. Build the solution. The output binary will be located in the `x64/Release/` folder.
-
-## Usage
-
-1. Run the compiled executable `StrafeHelper.exe`.
-2. The modern GUI will launch. You can configure your keybinds visually, use the console, and monitor your physical and simulated outputs in the State Monitor.
-3. Use the configured trigger key to activate the strafe logic in-game.
-4. Optionally switch the **Input Backend** in the Config tab to use the Interception driver if you have it installed.
+---
 
 ## Disclaimer
 
-This tool is for educational and personal use. Always respect the terms of service of the games you play. The developers are not responsible for any misuse or consequences arising from the use of this software.
+For educational and personal use only. Respect the terms of service of the games you play. The authors are not responsible for any consequences arising from use of this software.
 
 ## License
 
-This project is licensed under the MIT License.
-
+MIT — see [LICENSE.txt](LICENSE.txt).

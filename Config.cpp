@@ -38,6 +38,11 @@ std::atomic<int> TurboJumpDurationMs{5};
 // Input backend (0 = KbdHook default)
 std::atomic<int> SelectedBackend{0};
 
+// Superglide
+std::atomic<bool> EnableSuperglide{false};
+std::atomic<int> SuperglideBind{0xC0}; // VK_OEM_3 = tilde ~
+std::atomic<double> TargetFPS{60.0};
+
 // --- Implementation of LoadConfig ---
 void LoadConfig() {
   std::ifstream configFile(CONFIG_FILE_NAME);
@@ -138,6 +143,16 @@ void LoadConfig() {
         // Clamp to valid range; unknown values default to KbdHook
         SelectedBackend = (v == 1) ? 1 : 0;
       }
+      // Superglide
+      else if (key == "enable_superglide")
+        EnableSuperglide = (value == "true" || value == "1");
+      else if (key == "superglide_bind")
+        SuperglideBind = std::stoi(value);
+      else if (key == "target_fps") {
+        double fps = std::stod(value);
+        if (fps > 0.0)
+          TargetFPS.store(fps);
+      }
     } catch (const std::exception &e) {
       Logger::GetInstance().Log("Warning: Invalid config value on line " +
                                 std::to_string(lineNumber) + " for key '" +
@@ -232,6 +247,9 @@ void SaveConfig() {
       {"turbo_jump_delay", turboJumpDelayStr, false},
       {"turbo_jump_duration", turboJumpDurStr, false},
       {"input_backend", std::to_string(SelectedBackend.load()), false},
+      {"enable_superglide", EnableSuperglide.load() ? "true" : "false", false},
+      {"superglide_bind", std::to_string(SuperglideBind.load()), false},
+      {"target_fps", std::to_string(TargetFPS.load()), false},
   };
 
   auto trim = [](std::string &s) {

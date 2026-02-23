@@ -7,6 +7,7 @@
 #include "InterceptionBackend.h"
 #include "KeyboardHook.h"
 #include "SpamLogic.h"
+#include "SuperglideLogic.h"
 #include "TurboLogic.h"
 #include "Utils.h"
 #include <iostream>
@@ -28,6 +29,8 @@ HANDLE g_hTurboLootThread = NULL;
 HANDLE g_hTurboLootEvent = NULL;
 HANDLE g_hTurboJumpThread = NULL;
 HANDLE g_hTurboJumpEvent = NULL;
+HANDLE g_hSuperglideThread = NULL;
+HANDLE g_hSuperglideEvent = NULL;
 HINSTANCE g_hInstance = NULL;
 
 // Need full types here since it's the definition
@@ -127,6 +130,17 @@ void DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept {
     return;
   }
 
+  // Superglide
+  const int superglideBindVK =
+      Config::SuperglideBind.load(std::memory_order_relaxed);
+  if (static_cast<int>(vkCode) == superglideBindVK &&
+      Config::EnableSuperglide.load(std::memory_order_relaxed)) {
+    if (isKeyDown && Globals::g_hSuperglideEvent) {
+      SetEvent(Globals::g_hSuperglideEvent);
+    }
+    return;
+  }
+
   // WASD + spam/snaptap: pass event through to existing backend via
   // SpamLogic's g_hSpamEvent if needed
   const bool isWASD =
@@ -156,9 +170,17 @@ void InterceptionThreadMain() noexcept {
 
     const uint32_t count = g_interceptionBackend->PollEvents(batch, kMaxBatch);
     for (uint32_t i = 0; i < count; ++i) {
-      // Pass the raw event back through the driver first (non-suppressing
-      // backend)
-      (void)g_interceptionBackend->PassThrough(batch[i]);
+      // Suppress the superglide bind key: do not pass it to the OS so the
+      // game never sees it (mirrors the WinHook path returning 1).
+      const UINT vk = MapVirtualKeyW(batch[i].scanCode, MAPVK_VSC_TO_VK_EX);
+      const bool isSuperglindeBind =
+          Config::EnableSuperglide.load(std::memory_order_relaxed) &&
+          static_cast<int>(vk) ==
+              Config::SuperglideBind.load(std::memory_order_relaxed);
+
+      if (!isSuperglindeBind) {
+        (void)g_interceptionBackend->PassThrough(batch[i]);
+      }
       DispatchKeyEvent(batch[i]);
     }
   }
@@ -275,14 +297,18 @@ bool InitializeApplication(HINSTANCE hInstance) {
 
   Globals::g_hTurboLootEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
   Globals::g_hTurboJumpEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-  if (!Globals::g_hTurboLootEvent || !Globals::g_hTurboJumpEvent) {
-    LogError("CreateEvent for turbo failed");
+  Globals::g_hSuperglideEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+  if (!Globals::g_hTurboLootEvent || !Globals::g_hTurboJumpEvent ||
+      !Globals::g_hSuperglideEvent) {
+    LogError("CreateEvent for turbo/superglide failed");
     if (Globals::g_hSpamEvent)
       CloseHandle(Globals::g_hSpamEvent);
     if (Globals::g_hTurboLootEvent)
       CloseHandle(Globals::g_hTurboLootEvent);
     if (Globals::g_hTurboJumpEvent)
       CloseHandle(Globals::g_hTurboJumpEvent);
+    if (Globals::g_hSuperglideEvent)
+      CloseHandle(Globals::g_hSuperglideEvent);
     DeleteCriticalSection(&Globals::g_csActiveKeys);
     return false;
   }
@@ -312,6 +338,10 @@ bool InitializeApplication(HINSTANCE hInstance) {
   int jumpKey = Config::TurboJumpKey.load();
   if (Globals::g_KeyInfo.find(jumpKey) == Globals::g_KeyInfo.end()) {
     Globals::g_KeyInfo[jumpKey];
+  }
+  int superglideKey = Config::SuperglideBind.load();
+  if (Globals::g_KeyInfo.find(superglideKey) == Globals::g_KeyInfo.end()) {
+    Globals::g_KeyInfo[superglideKey];
   }
   std::cout << "Key states initialized." << std::endl;
 
@@ -379,6 +409,7 @@ bool InitializeApplication(HINSTANCE hInstance) {
 
   StartTurboLootThread();
   StartTurboJumpThread();
+  StartSuperglideThread();
 
   std::cout << "Application Initialization Successful." << std::endl;
   return true;
@@ -390,6 +421,7 @@ void CleanupApplication() {
   StopSpamThread();
   StopTurboLootThread();
   StopTurboJumpThread();
+  StopSuperglideThread();
 
   // Stop whichever input backend is active
   {
@@ -420,6 +452,10 @@ void CleanupApplication() {
   if (Globals::g_hTurboJumpEvent) {
     CloseHandle(Globals::g_hTurboJumpEvent);
     Globals::g_hTurboJumpEvent = NULL;
+  }
+  if (Globals::g_hSuperglideEvent) {
+    CloseHandle(Globals::g_hSuperglideEvent);
+    Globals::g_hSuperglideEvent = NULL;
   }
 
   DeleteCriticalSection(&Globals::g_csActiveKeys);

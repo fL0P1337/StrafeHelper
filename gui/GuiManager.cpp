@@ -247,11 +247,14 @@ void GuiManager::RenderConfigContent() {
   auto RebindButton = [&](const char *label, bool &rebinding,
                           std::atomic<int> &target) {
     if (rebinding) {
-      ImGui::Button("Press any key...", ImVec2(150, 0));
+      // Show as instructional text, not a button — the user must press a
+      // keyboard key; clicking would not help.
+      ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.10f, 1.0f), "Press any key...");
       ImGui::SameLine();
       ImGui::TextDisabled("%s", label);
       for (int i = 1; i < 256; i++) {
-        if (i == VK_LBUTTON || i == VK_RBUTTON || i == VK_ESCAPE)
+        if (i == VK_LBUTTON || i == VK_RBUTTON || i == VK_MBUTTON ||
+            i == VK_ESCAPE)
           continue;
         if (GetAsyncKeyState(i) & 0x8000) {
           target.store(i);
@@ -346,6 +349,35 @@ void GuiManager::RenderConfigContent() {
   }
 
 #undef FULL_SLIDER_INT
+
+  ImGui::Spacing();
+  ImGui::TextDisabled("Superglide");
+  ImGui::Separator();
+
+  bool useSuperglide = Config::EnableSuperglide.load();
+  if (ImGui::Checkbox("Enable Superglide", &useSuperglide)) {
+    Config::EnableSuperglide.store(useSuperglide);
+    Config::SaveConfig();
+  }
+
+  if (useSuperglide) {
+    // Target FPS slider — stored as double, displayed via float local copy
+    float fps = static_cast<float>(Config::TargetFPS.load());
+    ImGui::Text("Target FPS");
+    char fpsBuf[16];
+    snprintf(fpsBuf, sizeof(fpsBuf), "%.0f", fps);
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x -
+                    ImGui::CalcTextSize(fpsBuf).x);
+    ImGui::TextDisabled("%s", fpsBuf);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::SliderFloat("##SuperglideFPS", &fps, 30.0f, 300.0f, "")) {
+      Config::TargetFPS.store(static_cast<double>(fps));
+      Config::SaveConfig();
+    }
+
+    RebindButton("Superglide Bind", m_isRebindingSuperglideKey,
+                 Config::SuperglideBind);
+  }
 
   ImGui::Spacing();
   ImGui::TextDisabled("Input Backend");

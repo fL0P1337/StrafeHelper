@@ -148,6 +148,7 @@
     <ClInclude Include="KbdHookBackend.h" />
     <ClInclude Include="KeyboardHook.h" />
     <ClInclude Include="SpamLogic.h" />
+    <ClInclude Include="SuperglideLogic.h" />
     <ClInclude Include="TurboLogic.h" />
     <ClInclude Include="catrine\elements.h" />
     <ClInclude Include="Utils.h" />
@@ -170,6 +171,7 @@
     <ClCompile Include="KeyboardHook.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="SpamLogic.cpp" />
+    <ClCompile Include="SuperglideLogic.cpp" />
     <ClCompile Include="TurboLogic.cpp" />
     <ClCompile Include="catrine\elements.cpp" />
     <ClCompile Include="Utils.cpp" />

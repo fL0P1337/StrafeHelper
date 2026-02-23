@@ -9,7 +9,6 @@
 #include <vector>
 #include <windows.h> // <-- Add (needed for KBDLLHOOKSTRUCT etc)
 
-
 namespace {
 
 inline bool IsWasdVk(int vk) {
@@ -320,6 +319,16 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     }
     if (isKeyDown && Globals::g_hTurboJumpEvent)
       SetEvent(Globals::g_hTurboJumpEvent);
+  }
+
+  // Superglide bind — swallow the physical key so it never reaches the game
+  const int superglideBindVK =
+      Config::SuperglideBind.load(std::memory_order_relaxed);
+  if (vkCode == superglideBindVK &&
+      Config::EnableSuperglide.load(std::memory_order_relaxed)) {
+    if (isKeyDown && Globals::g_hSuperglideEvent)
+      SetEvent(Globals::g_hSuperglideEvent);
+    return 1; // suppress — do not pass to game
   }
 
   return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam); // Globals::
