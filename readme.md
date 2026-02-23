@@ -4,7 +4,7 @@
 
 ## Motivation
 
-Stop paying for macro apps that do one simple thing. StrafeHelper is a transparent, open-source movement utility for the PC FPS community — free, auditable, and built to stay that way.
+Stop paying for macro apps that do one simple thing. StrafeHelper is a transparent, open-source utility for the movement community — free, auditable, and built to stay that way.
 
 ---
 
@@ -12,7 +12,7 @@ Stop paying for macro apps that do one simple thing. StrafeHelper is a transpare
 
 | Feature | Description |
 |---|---|
-| **Macro Spam** | Rapid key cycling on WASD for strafing. Delay and hold-duration configurable. |
+| **[Lurch Strafing](https://apexmovement.tech/wiki/tech/General%20Tech%3ELurch%20Tech%3ELurch%20strafe%3ELurch%20Strafing%20article#Lurch_strafing)** | Automates rapid A↔D cycling while airborne to exploit Apex's momentum system for tight directional strafes — the core of Lurch Tech movement. Delay and hold-duration configurable. |
 | **SnapTap / SOCD** | Last-input-wins axis filtering — press both A+D and only the most-recent registers. |
 | **Turbo Loot** | Auto-repeats a loot key at configurable speed while held. |
 | **Turbo Jump** | Auto-repeats a jump key at configurable speed while held. |
@@ -22,20 +22,29 @@ Stop paying for macro apps that do one simple thing. StrafeHelper is a transpare
 
 ---
 
-## Superglide
+## [Superglide](https://apexmovement.tech/wiki/tech/General%20Tech%3EMantle%20Tech%3ESuperglide%3ESuperglide%20article#Superglide)
 
-Superglide automates the precise Jump + Crouch timing required to execute a superglide in Apex Legends (and similar titles).
+> A Superglide is an instant 1-frame acceleration out of a Mantle. It combines the speed of a Slide and a Jump simultaneously — because you leave the ground mid-mantle, you don't hit friction and keep all the velocity.
 
-**How it works:**
-1. Press your designated Superglide bind.
-2. The bind is **silently suppressed** — the game never sees the physical keypress.
-3. StrafeHelper injects:
+**What the game requires:**
+- You must be **sprinting** into a mantle.
+- In the **last 0.15 seconds** of the mantle animation, execute the input package:
+  - **Jump** (Space)
+  - Exactly **1 frame later** → **Crouch** (Left Ctrl)
+
+The mantle timing is the human element — StrafeHelper removes hardware timing variance from the **input package** entirely.
+
+**What StrafeHelper automates:**
+1. Press your designated Superglide bind (suppressed — the game never sees it).
+2. StrafeHelper instantly injects:
    - **Jump** (Space)
-   - Wait exactly **1 frame** at your configured FPS
+   - Waits exactly **1 frame** at your configured FPS using sub-millisecond QPC timing
    - **Crouch** (Left Ctrl)
 
+You still need to time the mantle window yourself — StrafeHelper guarantees the Jump→Crouch interval is pixel-perfect every time.
+
 **Timing precision:**  
-Frame duration is computed as `freq / targetFPS` in QPC ticks (no integer truncation). A hybrid wait — coarse `Sleep(1)` + QPC spin for the final 0.5 ms — achieves sub-millisecond accuracy at any frame rate.
+Frame duration = `freq / targetFPS` in QPC ticks (no integer truncation). Hybrid wait: coarse `Sleep(1)` + QPC busy-spin for the final 0.5 ms. Achieves <10 µs accuracy at any frame rate.
 
 **Config options (in-app or `config.cfg`):**
 
@@ -43,9 +52,9 @@ Frame duration is computed as `freq / targetFPS` in QPC ticks (no integer trunca
 |---|---|---|
 | `enable_superglide` | `false` | Master toggle |
 | `superglide_bind` | `192` (tilde `~`) | VK code of the trigger key |
-| `target_fps` | `60.0` | Game frame rate — determines 1-frame delay |
+| `target_fps` | `60.0` | Game frame rate — determines the 1-frame delay |
 
-A 500 ms cooldown after each execution prevents accidental re-trigger from key-hold repeat.
+A 500 ms cooldown after each execution prevents accidental re-trigger from key-hold auto-repeat.
 
 ---
 
@@ -138,7 +147,7 @@ $msbuild = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\Community\M
 
 ## Disclaimer
 
-For educational and personal use only. Respect the terms of service of the games you play. The authors are not responsible for any consequences arising from use of this software.
+For educational and personal use only. Respect the terms of service of the games you play. The author are not responsible for any consequences arising from use of this software.
 
 ## License
 

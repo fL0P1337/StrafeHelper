@@ -280,7 +280,7 @@ void GuiManager::RenderConfigContent() {
   ImGui::Separator();
 
   bool useSpam = Config::EnableSpam.load();
-  if (ImGui::Checkbox("Enable Macro Spam", &useSpam)) {
+  if (ImGui::Checkbox("Enable Lurch Strafing", &useSpam)) {
     Config::EnableSpam.store(useSpam);
     Config::SaveConfig();
   }
