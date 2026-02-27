@@ -2,6 +2,7 @@
 #include "KeyboardHook.h"
 #include "Config.h"
 #include "Globals.h" // <-- Add
+#include "KeybindManager.h"
 #include "SpamLogic.h"
 #include "Utils.h"
 #include <algorithm> // <-- Add
@@ -245,27 +246,26 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
   // Trigger gates macro spamming ONLY. SnapTap ownership resolution runs
   // independently.
   if (isTrigger && spamFeatureEnabled) {
-    if (isKeyDown) {
-      if (!Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
-        Globals::g_isCSpamActive.store(true, std::memory_order_relaxed);
-        std::cout << "Spam Activated" << std::endl;
+    // Use KeybindManager to process hold/toggle mode
+    bool shouldBeActive = KeybindManager::ProcessSpamTrigger(vkCode, isKeyDown);
+    
+    if (shouldBeActive && !Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
+      Globals::g_isCSpamActive.store(true, std::memory_order_relaxed);
+      std::cout << "Spam Activated" << std::endl;
 
-        // Ensure any held movement keys are virtually UP while spamming.
-        ApplySnapTapOutput(true);
-        SendKeyUpForPhysicallyHeldWasd();
+      // Ensure any held movement keys are virtually UP while spamming.
+      ApplySnapTapOutput(true);
+      SendKeyUpForPhysicallyHeldWasd();
 
-        PublishSpamKeysFromState(snapTapEnabled);
-      }
-    } else if (isKeyUp) {
-      if (Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
-        std::cout << "Spam Deactivated" << std::endl;
+      PublishSpamKeysFromState(snapTapEnabled);
+    } else if (!shouldBeActive && Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
+      std::cout << "Spam Deactivated" << std::endl;
 
-        if (snapTapEnabled) {
-          CleanupSpamState(false);
-          ApplySnapTapOutput(false);
-        } else {
-          CleanupSpamState(true);
-        }
+      if (snapTapEnabled) {
+        CleanupSpamState(false);
+        ApplySnapTapOutput(false);
+      } else {
+        CleanupSpamState(true);
       }
     }
     return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam);
@@ -302,22 +302,16 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
   const int turboLootKey = Config::TurboLootKey.load(std::memory_order_relaxed);
   if (vkCode == turboLootKey &&
       Config::EnableTurboLoot.load(std::memory_order_relaxed)) {
-    if (isManagedKey) {
-      itKeyInfo->second.physicalKeyDown.store(isKeyDown,
-                                              std::memory_order_relaxed);
-    }
-    if (isKeyDown && Globals::g_hTurboLootEvent)
+    KeybindManager::ProcessTurboLoot(vkCode, isKeyDown);
+    if (Globals::g_hTurboLootEvent)
       SetEvent(Globals::g_hTurboLootEvent);
   }
 
   const int turboJumpKey = Config::TurboJumpKey.load(std::memory_order_relaxed);
   if (vkCode == turboJumpKey &&
       Config::EnableTurboJump.load(std::memory_order_relaxed)) {
-    if (isManagedKey) {
-      itKeyInfo->second.physicalKeyDown.store(isKeyDown,
-                                              std::memory_order_relaxed);
-    }
-    if (isKeyDown && Globals::g_hTurboJumpEvent)
+    KeybindManager::ProcessTurboJump(vkCode, isKeyDown);
+    if (Globals::g_hTurboJumpEvent)
       SetEvent(Globals::g_hTurboJumpEvent);
   }
 
@@ -326,7 +320,8 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
       Config::SuperglideBind.load(std::memory_order_relaxed);
   if (vkCode == superglideBindVK &&
       Config::EnableSuperglide.load(std::memory_order_relaxed)) {
-    if (isKeyDown && Globals::g_hSuperglideEvent)
+    // Use KeybindManager for hold/toggle mode (triggers on key-down edge)
+    if (KeybindManager::ProcessSuperglide(vkCode, isKeyDown) && Globals::g_hSuperglideEvent)
       SetEvent(Globals::g_hSuperglideEvent);
     return 1; // suppress — do not pass to game
   }

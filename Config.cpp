@@ -22,18 +22,24 @@ std::atomic<bool> IsLocked{false};
 std::atomic<bool> EnableSpam{true};
 std::atomic<bool> EnableSnapTap{true};
 std::atomic<int> KeySpamTrigger{'C'}; // VK_KEY 'C'
+std::atomic<KeybindMode> KeySpamTriggerMode{KeybindMode::Hold};
+std::atomic<bool> KeySpamTriggerToggleActive{false};
 
 // Turbo Loot
 std::atomic<bool> EnableTurboLoot{false};
 std::atomic<int> TurboLootKey{0x45}; // 'E'
 std::atomic<int> TurboLootDelayMs{15};
 std::atomic<int> TurboLootDurationMs{5};
+std::atomic<KeybindMode> TurboLootMode{KeybindMode::Hold};
+std::atomic<bool> TurboLootToggleActive{false};
 
 // Turbo Jump
 std::atomic<bool> EnableTurboJump{false};
 std::atomic<int> TurboJumpKey{0x20}; // VK_SPACE
 std::atomic<int> TurboJumpDelayMs{15};
 std::atomic<int> TurboJumpDurationMs{5};
+std::atomic<KeybindMode> TurboJumpMode{KeybindMode::Hold};
+std::atomic<bool> TurboJumpToggleActive{false};
 
 // Input backend (0 = KbdHook default)
 std::atomic<int> SelectedBackend{0};
@@ -42,6 +48,8 @@ std::atomic<int> SelectedBackend{0};
 std::atomic<bool> EnableSuperglide{false};
 std::atomic<int> SuperglideBind{0xC0}; // VK_OEM_3 = tilde ~
 std::atomic<double> TargetFPS{60.0};
+std::atomic<KeybindMode> SuperglideMode{KeybindMode::Hold};
+std::atomic<bool> SuperglideToggleActive{false};
 
 // --- Implementation of LoadConfig ---
 void LoadConfig() {
@@ -120,6 +128,10 @@ void LoadConfig() {
           }
         }
       }
+      else if (key == "key_spam_trigger_mode") {
+        int mode = std::stoi(value);
+        KeySpamTriggerMode = (mode == 1) ? KeybindMode::Toggle : KeybindMode::Hold;
+      }
       // Turbo Loot
       else if (key == "enable_turbo_loot")
         EnableTurboLoot = (value == "true" || value == "1");
@@ -129,6 +141,10 @@ void LoadConfig() {
         TurboLootDelayMs = std::stoi(value);
       else if (key == "turbo_loot_duration")
         TurboLootDurationMs = std::stoi(value);
+      else if (key == "turbo_loot_mode") {
+        int mode = std::stoi(value);
+        TurboLootMode = (mode == 1) ? KeybindMode::Toggle : KeybindMode::Hold;
+      }
       // Turbo Jump
       else if (key == "enable_turbo_jump")
         EnableTurboJump = (value == "true" || value == "1");
@@ -138,6 +154,10 @@ void LoadConfig() {
         TurboJumpDelayMs = std::stoi(value);
       else if (key == "turbo_jump_duration")
         TurboJumpDurationMs = std::stoi(value);
+      else if (key == "turbo_jump_mode") {
+        int mode = std::stoi(value);
+        TurboJumpMode = (mode == 1) ? KeybindMode::Toggle : KeybindMode::Hold;
+      }
       else if (key == "input_backend") {
         int v = std::stoi(value);
         // Clamp to valid range; unknown values default to KbdHook
@@ -153,6 +173,11 @@ void LoadConfig() {
         if (fps > 0.0)
           TargetFPS.store(fps);
       }
+      else if (key == "superglide_mode") {
+        // Legacy key retained for compatibility; superglide is always HOLD.
+        (void)std::stoi(value);
+        SuperglideMode = KeybindMode::Hold;
+      }
     } catch (const std::exception &e) {
       Logger::GetInstance().Log("Warning: Invalid config value on line " +
                                 std::to_string(lineNumber) + " for key '" +
@@ -164,6 +189,10 @@ void LoadConfig() {
   if (!hasEnableSpam) {
     EnableSpam.store(legacyEnableSpam, std::memory_order_relaxed);
   }
+
+  // Superglide mode is fixed to HOLD even if legacy config says otherwise.
+  SuperglideMode.store(KeybindMode::Hold, std::memory_order_relaxed);
+  SuperglideToggleActive.store(false, std::memory_order_relaxed);
 
   std::string logMsg = "Configuration loaded:\n";
   logMsg += "  SPAM_DELAY_MS: " + std::to_string(SpamDelayMs.load()) + "\n";
@@ -238,18 +267,23 @@ void SaveConfig() {
       {"enable_spam", enableSpamStr, false},
       {"enable_snaptap", snapTapStr, false},
       {"KEY_SPAM_TRIGGER", triggerStr, false},
+      {"key_spam_trigger_mode", std::to_string(static_cast<int>(KeySpamTriggerMode.load())), false},
       {"enable_turbo_loot", turboLootStr, false},
       {"turbo_loot_key", turboLootKeyStr, false},
       {"turbo_loot_delay", turboLootDelayStr, false},
       {"turbo_loot_duration", turboLootDurStr, false},
+      {"turbo_loot_mode", std::to_string(static_cast<int>(TurboLootMode.load())), false},
       {"enable_turbo_jump", turboJumpStr, false},
       {"turbo_jump_key", turboJumpKeyStr, false},
       {"turbo_jump_delay", turboJumpDelayStr, false},
       {"turbo_jump_duration", turboJumpDurStr, false},
+      {"turbo_jump_mode", std::to_string(static_cast<int>(TurboJumpMode.load())), false},
       {"input_backend", std::to_string(SelectedBackend.load()), false},
       {"enable_superglide", EnableSuperglide.load() ? "true" : "false", false},
       {"superglide_bind", std::to_string(SuperglideBind.load()), false},
       {"target_fps", std::to_string(TargetFPS.load()), false},
+      {"superglide_mode", std::to_string(static_cast<int>(KeybindMode::Hold)),
+       false},
   };
 
   auto trim = [](std::string &s) {

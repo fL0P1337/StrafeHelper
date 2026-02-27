@@ -145,15 +145,15 @@ void GuiManager::Render() {
                   "StrafeHelper");
     ImGui::PopFont();
 
-    ImGui::SetCursorPos({160, 19});
+    ImGui::SetCursorPos({160, 8});
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 10));
     ImGui::BeginGroup();
     {
-      // Calculate responsive tab widths based on available window space
       const float tabAreaStart = 160.0f;
-      const float tabAreaEnd = size.x - 15.0f; // Right padding
+      const float tabAreaEnd = size.x - 15.0f;
       const float availableWidth = tabAreaEnd - tabAreaStart;
       const int numTabs = 3;
-      const float tabSpacing = 4.0f; // Spacing between tabs
+      const float tabSpacing = 4.0f;
       const float totalSpacing = tabSpacing * (numTabs - 1);
       const float tabWidth = (availableWidth - totalSpacing) / numTabs;
 
@@ -170,6 +170,7 @@ void GuiManager::Render() {
         m_currentTab = TabSelection::CONSOLE;
     }
     ImGui::EndGroup();
+    ImGui::PopStyleVar();
 
     ImGui::PushFont(m_fontMedium);
 
@@ -227,10 +228,13 @@ void GuiManager::RenderConfigContent() {
     ImGui::SameLine(ImGui::GetContentRegionAvail().x -                         \
                     ImGui::CalcTextSize(_vbuf).x);                             \
     ImGui::TextDisabled("%s", _vbuf);                                          \
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,                             \
+        ImVec2(ImGui::GetStyle().FramePadding.x, 2.0f));                       \
     ImGui::SetNextItemWidth(-FLT_MIN);                                         \
     if (ImGui::SliderInt("##" label, &(var), vmin, vmax, "")) {                \
       saveFn;                                                                  \
     }                                                                          \
+    ImGui::PopStyleVar();                                                      \
   } while (false)
 
   // Helper: resolve VK code to a readable key name
@@ -268,7 +272,7 @@ void GuiManager::RenderConfigContent() {
     } else {
       char keyName[64] = "Unknown Key";
       VkToName(target.load(), keyName, sizeof(keyName));
-      if (ImGui::Button(keyName, ImVec2(150, 0))) {
+      if (ImGui::Button(keyName, ImVec2(0, 0))) {
         rebinding = true;
       }
       ImGui::SameLine();
@@ -276,16 +280,50 @@ void GuiManager::RenderConfigContent() {
     }
   };
 
+  // Shared child layout for all feature blocks:
+  // - keeps checkboxes aligned
+  // - keeps child controls consistently indented
+  constexpr float kFeatureChildIndent = 16.0f;
+  auto BeginFeatureChildren = [&](bool enabled) {
+    if (!enabled) {
+      return false;
+    }
+    ImGui::Indent(kFeatureChildIndent);
+    ImGui::BeginGroup();
+    return true;
+  };
+  auto EndFeatureChildren = [&]() {
+    ImGui::EndGroup();
+    ImGui::Unindent(kFeatureChildIndent);
+  };
+  auto RenderBindModeSelector = [&](const char *id) {
+    int bindMode = Config::IsLocked.load(std::memory_order_relaxed) ? 1 : 0;
+    const char *bindModes[] = {"Hold", "Toggle"};
+    float comboWidth = ImGui::CalcTextSize("Toggle").x +
+                       ImGui::GetStyle().FramePadding.x * 2.0f +
+                       ImGui::GetFrameHeight();
+    ImGui::SetNextItemWidth(comboWidth);
+    if (ImGui::Combo(id, &bindMode, bindModes, IM_ARRAYSIZE(bindModes))) {
+      Config::IsLocked.store(bindMode == 1, std::memory_order_relaxed);
+      Config::SaveConfig();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Bind Mode");
+  };
+
   ImGui::TextDisabled("Features");
   ImGui::Separator();
 
   bool useSpam = Config::EnableSpam.load();
-  if (ImGui::Checkbox("Enable Lurch Strafing", &useSpam)) {
+  if (ImGui::Checkbox("Lurch Strafing", &useSpam)) {
     Config::EnableSpam.store(useSpam);
     Config::SaveConfig();
   }
 
-  if (useSpam) {
+  if (BeginFeatureChildren(useSpam)) {
+    RebindButton("Trigger Key", m_isRebinding, Config::KeySpamTrigger);
+    RenderBindModeSelector("##SpamBindMode");
+
     int delay = Config::SpamDelayMs.load();
     FULL_SLIDER_INT("Spam Delay", delay, 1, 100, "%dms",
                     (Config::SpamDelayMs.store(delay), Config::SaveConfig()));
@@ -294,12 +332,11 @@ void GuiManager::RenderConfigContent() {
     FULL_SLIDER_INT(
         "Hold Duration", duration, 0, 50, "%dms",
         (Config::SpamKeyDownDurationMs.store(duration), Config::SaveConfig()));
-
-    RebindButton("Trigger Key", m_isRebinding, Config::KeySpamTrigger);
+    EndFeatureChildren();
   }
 
   bool useSnapTap = Config::EnableSnapTap.load();
-  if (ImGui::Checkbox("Enable SnapTap (SOCD)", &useSnapTap)) {
+  if (ImGui::Checkbox("SnapTap (SOCD)", &useSnapTap)) {
     Config::EnableSnapTap.store(useSnapTap);
     Config::SaveConfig();
   }
@@ -309,12 +346,15 @@ void GuiManager::RenderConfigContent() {
   ImGui::Separator();
 
   bool useTurboLoot = Config::EnableTurboLoot.load();
-  if (ImGui::Checkbox("Enable Turbo Loot", &useTurboLoot)) {
+  if (ImGui::Checkbox("Turbo Loot", &useTurboLoot)) {
     Config::EnableTurboLoot.store(useTurboLoot);
     Config::SaveConfig();
   }
 
-  if (useTurboLoot) {
+  if (BeginFeatureChildren(useTurboLoot)) {
+    RebindButton("Loot Key", m_isRebindingLootKey, Config::TurboLootKey);
+    RenderBindModeSelector("##LootBindMode");
+
     int lootDelay = Config::TurboLootDelayMs.load();
     FULL_SLIDER_INT(
         "Loot Spam Delay", lootDelay, 1, 100, "%dms",
@@ -324,17 +364,19 @@ void GuiManager::RenderConfigContent() {
     FULL_SLIDER_INT("Loot Hold Duration", lootDuration, 0, 50, "%dms",
                     (Config::TurboLootDurationMs.store(lootDuration),
                      Config::SaveConfig()));
-
-    RebindButton("Loot Key", m_isRebindingLootKey, Config::TurboLootKey);
+    EndFeatureChildren();
   }
 
   bool useTurboJump = Config::EnableTurboJump.load();
-  if (ImGui::Checkbox("Enable Turbo Jump", &useTurboJump)) {
+  if (ImGui::Checkbox("Turbo Jump", &useTurboJump)) {
     Config::EnableTurboJump.store(useTurboJump);
     Config::SaveConfig();
   }
 
-  if (useTurboJump) {
+  if (BeginFeatureChildren(useTurboJump)) {
+    RebindButton("Jump Key", m_isRebindingJumpKey, Config::TurboJumpKey);
+    RenderBindModeSelector("##JumpBindMode");
+
     int jumpDelay = Config::TurboJumpDelayMs.load();
     FULL_SLIDER_INT(
         "Jump Spam Delay", jumpDelay, 1, 100, "%dms",
@@ -344,8 +386,7 @@ void GuiManager::RenderConfigContent() {
     FULL_SLIDER_INT("Jump Hold Duration", jumpDuration, 0, 50, "%dms",
                     (Config::TurboJumpDurationMs.store(jumpDuration),
                      Config::SaveConfig()));
-
-    RebindButton("Jump Key", m_isRebindingJumpKey, Config::TurboJumpKey);
+    EndFeatureChildren();
   }
 
 #undef FULL_SLIDER_INT
@@ -355,12 +396,15 @@ void GuiManager::RenderConfigContent() {
   ImGui::Separator();
 
   bool useSuperglide = Config::EnableSuperglide.load();
-  if (ImGui::Checkbox("Enable Superglide", &useSuperglide)) {
+  if (ImGui::Checkbox("Superglide", &useSuperglide)) {
     Config::EnableSuperglide.store(useSuperglide);
     Config::SaveConfig();
   }
 
-  if (useSuperglide) {
+  if (BeginFeatureChildren(useSuperglide)) {
+    RebindButton("Superglide Bind", m_isRebindingSuperglideKey,
+                 Config::SuperglideBind);
+
     // Target FPS slider — stored as double, displayed via float local copy
     float fps = static_cast<float>(Config::TargetFPS.load());
     ImGui::Text("Target FPS");
@@ -369,14 +413,15 @@ void GuiManager::RenderConfigContent() {
     ImGui::SameLine(ImGui::GetContentRegionAvail().x -
                     ImGui::CalcTextSize(fpsBuf).x);
     ImGui::TextDisabled("%s", fpsBuf);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+        ImVec2(ImGui::GetStyle().FramePadding.x, 2.0f));
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::SliderFloat("##SuperglideFPS", &fps, 30.0f, 300.0f, "")) {
       Config::TargetFPS.store(static_cast<double>(fps));
       Config::SaveConfig();
     }
-
-    RebindButton("Superglide Bind", m_isRebindingSuperglideKey,
-                 Config::SuperglideBind);
+    ImGui::PopStyleVar();
+    EndFeatureChildren();
   }
 
   ImGui::Spacing();

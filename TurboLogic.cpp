@@ -2,6 +2,7 @@
 #include "TurboLogic.h"
 #include "Config.h"
 #include "Globals.h"
+#include "KeybindManager.h"
 #include "Utils.h"
 #include <atomic>
 #include <iostream>
@@ -21,9 +22,8 @@ DWORD WINAPI TurboLootThread(LPVOID) {
     const int vk = Config::TurboLootKey.load(std::memory_order_relaxed);
 
     if (enabled) {
-      auto it = Globals::g_KeyInfo.find(vk);
-      if (it != Globals::g_KeyInfo.end() &&
-          it->second.physicalKeyDown.load(std::memory_order_relaxed)) {
+      // Check if feature should be active (handles both Hold and Toggle modes)
+      if (KeybindManager::IsTurboLootActive()) {
         timeout = Config::TurboLootDelayMs.load(std::memory_order_relaxed);
       }
     }
@@ -36,11 +36,11 @@ DWORD WINAPI TurboLootThread(LPVOID) {
     if (!Config::EnableTurboLoot.load(std::memory_order_relaxed))
       continue;
 
-    const int key = Config::TurboLootKey.load(std::memory_order_relaxed);
-    auto it = Globals::g_KeyInfo.find(key);
-    if (it == Globals::g_KeyInfo.end() ||
-        !it->second.physicalKeyDown.load(std::memory_order_relaxed))
+    // Check if feature should be active (handles both Hold and Toggle modes)
+    if (!KeybindManager::IsTurboLootActive())
       continue;
+
+    const int key = Config::TurboLootKey.load(std::memory_order_relaxed);
 
     // Send key-down
     INPUT input = {INPUT_KEYBOARD};
@@ -79,9 +79,8 @@ DWORD WINAPI TurboJumpThread(LPVOID) {
     const int vk = Config::TurboJumpKey.load(std::memory_order_relaxed);
 
     if (enabled) {
-      auto it = Globals::g_KeyInfo.find(vk);
-      if (it != Globals::g_KeyInfo.end() &&
-          it->second.physicalKeyDown.load(std::memory_order_relaxed)) {
+      // Check if feature should be active (handles both Hold and Toggle modes)
+      if (KeybindManager::IsTurboJumpActive()) {
         timeout = Config::TurboJumpDelayMs.load(std::memory_order_relaxed);
       }
     }
@@ -94,11 +93,11 @@ DWORD WINAPI TurboJumpThread(LPVOID) {
     if (!Config::EnableTurboJump.load(std::memory_order_relaxed))
       continue;
 
-    const int key = Config::TurboJumpKey.load(std::memory_order_relaxed);
-    auto it = Globals::g_KeyInfo.find(key);
-    if (it == Globals::g_KeyInfo.end() ||
-        !it->second.physicalKeyDown.load(std::memory_order_relaxed))
+    // Check if feature should be active (handles both Hold and Toggle modes)
+    if (!KeybindManager::IsTurboJumpActive())
       continue;
+
+    const int key = Config::TurboJumpKey.load(std::memory_order_relaxed);
 
     // Send key-down
     INPUT input = {INPUT_KEYBOARD};

@@ -5,6 +5,7 @@
 #include "Globals.h"
 #include "InputBackend.h"
 #include "InterceptionBackend.h"
+#include "KeybindManager.h"
 #include "KeyboardHook.h"
 #include "SpamLogic.h"
 #include "SuperglideLogic.h"
@@ -50,29 +51,14 @@ std::unique_ptr<InputBackend> g_interceptionBackend;
 std::thread g_interceptionThread;
 std::atomic<bool> g_interceptionRunning{false};
 std::mutex g_backendMutex; // guards start/stop of interception thread
+HHOOK g_hSideMouseHook = NULL;
 
 // -----------------------------------------------------------------------
-// DispatchKeyEvent — translates a NEO_KEY_EVENT into the same state updates
-// that KeyboardProc handles for the WinHook backend.  Only accessed from
-// the interception polling thread (single writer for g_KeyInfo atomics).
+// Shared keybind dispatch logic used by both interception keyboard events
+// and the side-mouse hook path.
 // -----------------------------------------------------------------------
-void DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept {
-  // Ignore events we ourselves injected (same marker as KbdHookBackend uses)
-  if (evt.nativeInformation == NEO_SYNTHETIC_INFORMATION) {
-    return;
-  }
-
-  // Map scan code -> virtual key via Windows API
-  const UINT vkCode = MapVirtualKeyW(evt.scanCode, MAPVK_VSC_TO_VK_EX);
-  if (vkCode == 0) {
-    return;
-  }
-
-  const bool isKeyDown = (evt.flags & NEO_KEY_BREAK) == 0u;
-  const bool isKeyUp = !isKeyDown;
-
-  // Update physicalKeyDown for managed keys
-  auto itKeyInfo = Globals::g_KeyInfo.find(static_cast<int>(vkCode));
+bool HandleFeatureKeyEvent(int vkCode, bool isKeyDown) noexcept {
+  auto itKeyInfo = Globals::g_KeyInfo.find(vkCode);
   if (itKeyInfo != Globals::g_KeyInfo.end()) {
     itKeyInfo->second.physicalKeyDown.store(isKeyDown,
                                             std::memory_order_relaxed);
@@ -82,76 +68,160 @@ void DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept {
       Config::EnableSpam.load(std::memory_order_relaxed);
   const bool snapTapEnabled =
       Config::EnableSnapTap.load(std::memory_order_relaxed);
-  const bool spamActive =
-      Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
-      spamFeatureEnabled;
-
   const int currentTriggerKey =
       Config::KeySpamTrigger.load(std::memory_order_relaxed);
-  const bool isTrigger = (static_cast<int>(vkCode) == currentTriggerKey);
 
   // Trigger: gates macro spamming
-  if (isTrigger && spamFeatureEnabled) {
-    if (isKeyDown) {
-      if (!Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
-        Globals::g_isCSpamActive.store(true, std::memory_order_relaxed);
-        std::cout << "Spam Activated" << std::endl;
-        // let SpamLogic handle it via existing event mechanism
-        if (Globals::g_hSpamEvent) {
-          SetEvent(Globals::g_hSpamEvent);
-        }
+  if (vkCode == currentTriggerKey && spamFeatureEnabled) {
+    // Use KeybindManager to process hold/toggle mode
+    const bool shouldBeActive =
+        KeybindManager::ProcessSpamTrigger(vkCode, isKeyDown);
+
+    if (shouldBeActive &&
+        !Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
+      Globals::g_isCSpamActive.store(true, std::memory_order_relaxed);
+      std::cout << "Spam Activated" << std::endl;
+      // let SpamLogic handle it via existing event mechanism
+      if (Globals::g_hSpamEvent) {
+        SetEvent(Globals::g_hSpamEvent);
       }
-    } else if (isKeyUp) {
-      if (Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
-        std::cout << "Spam Deactivated" << std::endl;
-        CleanupSpamState(snapTapEnabled ? false : true);
-      }
+    } else if (!shouldBeActive &&
+               Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
+      std::cout << "Spam Deactivated" << std::endl;
+      CleanupSpamState(snapTapEnabled ? false : true);
     }
-    return;
+    return false;
   }
 
   // Turbo Loot
   const int turboLootKey = Config::TurboLootKey.load(std::memory_order_relaxed);
-  if (static_cast<int>(vkCode) == turboLootKey &&
+  if (vkCode == turboLootKey &&
       Config::EnableTurboLoot.load(std::memory_order_relaxed)) {
-    if (isKeyDown && Globals::g_hTurboLootEvent) {
+    KeybindManager::ProcessTurboLoot(vkCode, isKeyDown);
+    if (Globals::g_hTurboLootEvent)
       SetEvent(Globals::g_hTurboLootEvent);
-    }
-    return;
+    return false;
   }
 
   // Turbo Jump
   const int turboJumpKey = Config::TurboJumpKey.load(std::memory_order_relaxed);
-  if (static_cast<int>(vkCode) == turboJumpKey &&
+  if (vkCode == turboJumpKey &&
       Config::EnableTurboJump.load(std::memory_order_relaxed)) {
-    if (isKeyDown && Globals::g_hTurboJumpEvent) {
+    KeybindManager::ProcessTurboJump(vkCode, isKeyDown);
+    if (Globals::g_hTurboJumpEvent)
       SetEvent(Globals::g_hTurboJumpEvent);
-    }
-    return;
+    return false;
   }
 
-  // Superglide
+  // Superglide bind is suppressed so it never reaches the game.
   const int superglideBindVK =
       Config::SuperglideBind.load(std::memory_order_relaxed);
-  if (static_cast<int>(vkCode) == superglideBindVK &&
+  if (vkCode == superglideBindVK &&
       Config::EnableSuperglide.load(std::memory_order_relaxed)) {
-    if (isKeyDown && Globals::g_hSuperglideEvent) {
+    if (KeybindManager::ProcessSuperglide(vkCode, isKeyDown) &&
+        Globals::g_hSuperglideEvent) {
       SetEvent(Globals::g_hSuperglideEvent);
     }
-    return;
+    return true;
   }
 
-  // WASD + spam/snaptap: pass event through to existing backend via
-  // SpamLogic's g_hSpamEvent if needed
+  // Wake spam thread when movement keys change while spam is active.
+  const bool spamActive =
+      Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
+      spamFeatureEnabled;
   const bool isWASD =
       (vkCode == 'W' || vkCode == 'A' || vkCode == 'S' || vkCode == 'D');
   if (isWASD && spamActive) {
-    // ensure SpamThread is awake with updated key state
     if (Globals::g_hSpamEvent) {
       SetEvent(Globals::g_hSpamEvent);
     }
   }
-  (void)snapTapEnabled; // SnapTap visual output is handled by SpamThread
+  return false;
+}
+
+// -----------------------------------------------------------------------
+// DispatchKeyEvent - translates a NEO_KEY_EVENT and feeds shared keybind logic.
+// Returns true if the physical event should be suppressed.
+// -----------------------------------------------------------------------
+bool DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept {
+  // Ignore events we ourselves injected (same marker as KbdHookBackend uses)
+  if (evt.nativeInformation == NEO_SYNTHETIC_INFORMATION) {
+    return false;
+  }
+
+  // Map scan code -> virtual key via Windows API
+  const UINT vkCode = MapVirtualKeyW(evt.scanCode, MAPVK_VSC_TO_VK_EX);
+  if (vkCode == 0) {
+    return false;
+  }
+
+  const bool isKeyDown = (evt.flags & NEO_KEY_BREAK) == 0u;
+  return HandleFeatureKeyEvent(static_cast<int>(vkCode), isKeyDown);
+}
+
+LRESULT CALLBACK SideMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
+  if (nCode != HC_ACTION) {
+    return CallNextHookEx(g_hSideMouseHook, nCode, wParam, lParam);
+  }
+
+  if (wParam != WM_XBUTTONDOWN && wParam != WM_XBUTTONUP &&
+      wParam != WM_XBUTTONDBLCLK) {
+    return CallNextHookEx(g_hSideMouseHook, nCode, wParam, lParam);
+  }
+
+  const auto *mouse = reinterpret_cast<const MSLLHOOKSTRUCT *>(lParam);
+  if (!mouse) {
+    return CallNextHookEx(g_hSideMouseHook, nCode, wParam, lParam);
+  }
+
+  if ((mouse->flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED)) != 0u) {
+    return CallNextHookEx(g_hSideMouseHook, nCode, wParam, lParam);
+  }
+
+  const DWORD xButton = HIWORD(mouse->mouseData);
+  const int vkCode =
+      (xButton == XBUTTON1)
+          ? VK_XBUTTON1
+          : ((xButton == XBUTTON2) ? VK_XBUTTON2 : 0);
+  if (vkCode == 0) {
+    return CallNextHookEx(g_hSideMouseHook, nCode, wParam, lParam);
+  }
+
+  const bool isKeyDown =
+      (wParam == WM_XBUTTONDOWN || wParam == WM_XBUTTONDBLCLK);
+  const bool shouldSuppress = HandleFeatureKeyEvent(vkCode, isKeyDown);
+  if (shouldSuppress) {
+    return 1;
+  }
+
+  return CallNextHookEx(g_hSideMouseHook, nCode, wParam, lParam);
+}
+
+bool SetupSideMouseHook() {
+  if (g_hSideMouseHook) {
+    return true;
+  }
+
+  g_hSideMouseHook =
+      SetWindowsHookExW(WH_MOUSE_LL, SideMouseProc, Globals::g_hInstance, 0);
+  if (!g_hSideMouseHook) {
+    LogError("SetWindowsHookEx for side-mouse hook failed");
+    return false;
+  }
+
+  std::cout << "Side mouse hook installed." << std::endl;
+  return true;
+}
+
+void TeardownSideMouseHook() {
+  if (!g_hSideMouseHook) {
+    return;
+  }
+
+  if (!UnhookWindowsHookEx(g_hSideMouseHook)) {
+    LogError("UnhookWindowsHookEx for side-mouse hook failed");
+  }
+  g_hSideMouseHook = NULL;
 }
 
 // -----------------------------------------------------------------------
@@ -170,18 +240,10 @@ void InterceptionThreadMain() noexcept {
 
     const uint32_t count = g_interceptionBackend->PollEvents(batch, kMaxBatch);
     for (uint32_t i = 0; i < count; ++i) {
-      // Suppress the superglide bind key: do not pass it to the OS so the
-      // game never sees it (mirrors the WinHook path returning 1).
-      const UINT vk = MapVirtualKeyW(batch[i].scanCode, MAPVK_VSC_TO_VK_EX);
-      const bool isSuperglindeBind =
-          Config::EnableSuperglide.load(std::memory_order_relaxed) &&
-          static_cast<int>(vk) ==
-              Config::SuperglideBind.load(std::memory_order_relaxed);
-
-      if (!isSuperglindeBind) {
+      const bool shouldSuppress = DispatchKeyEvent(batch[i]);
+      if (!shouldSuppress) {
         (void)g_interceptionBackend->PassThrough(batch[i]);
       }
-      DispatchKeyEvent(batch[i]);
     }
   }
 }
@@ -288,6 +350,9 @@ bool InitializeApplication(HINSTANCE hInstance) {
 
   Config::LoadConfig();
 
+  // Initialize keybind manager for edge detection
+  KeybindManager::Initialize();
+
   Globals::g_hSpamEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
   if (!Globals::g_hSpamEvent) {
     LogError("CreateEvent failed");
@@ -326,6 +391,8 @@ bool InitializeApplication(HINSTANCE hInstance) {
   Globals::g_KeyInfo['A'];
   Globals::g_KeyInfo['S'];
   Globals::g_KeyInfo['D'];
+  Globals::g_KeyInfo[VK_XBUTTON1];
+  Globals::g_KeyInfo[VK_XBUTTON2];
   int triggerKey = Config::KeySpamTrigger.load();
   if (Globals::g_KeyInfo.find(triggerKey) == Globals::g_KeyInfo.end()) {
     Globals::g_KeyInfo[triggerKey];
@@ -344,6 +411,22 @@ bool InitializeApplication(HINSTANCE hInstance) {
     Globals::g_KeyInfo[superglideKey];
   }
   std::cout << "Key states initialized." << std::endl;
+
+  if (!SetupSideMouseHook()) {
+    if (Globals::g_hWindow)
+      DestroyWindow(Globals::g_hWindow);
+    UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
+    CloseHandle(Globals::g_hSpamEvent);
+    CloseHandle(Globals::g_hTurboLootEvent);
+    CloseHandle(Globals::g_hTurboJumpEvent);
+    CloseHandle(Globals::g_hSuperglideEvent);
+    DeleteCriticalSection(&Globals::g_csActiveKeys);
+    Globals::g_hSpamEvent = NULL;
+    Globals::g_hTurboLootEvent = NULL;
+    Globals::g_hTurboJumpEvent = NULL;
+    Globals::g_hSuperglideEvent = NULL;
+    return false;
+  }
 
   // --- Start the selected input backend ---
   const auto backendKind =
@@ -375,14 +458,19 @@ bool InitializeApplication(HINSTANCE hInstance) {
         CreateThread(NULL, 0, HookThreadFunc, NULL, 0, NULL);
     if (!Globals::g_hHookThread) {
     hook_thread_failed:
+      TeardownSideMouseHook();
       if (Globals::g_hWindow)
         DestroyWindow(Globals::g_hWindow);
       UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
       CloseHandle(Globals::g_hSpamEvent);
       CloseHandle(Globals::g_hTurboLootEvent);
       CloseHandle(Globals::g_hTurboJumpEvent);
+      CloseHandle(Globals::g_hSuperglideEvent);
       DeleteCriticalSection(&Globals::g_csActiveKeys);
       Globals::g_hSpamEvent = NULL;
+      Globals::g_hTurboLootEvent = NULL;
+      Globals::g_hTurboJumpEvent = NULL;
+      Globals::g_hSuperglideEvent = NULL;
       return false;
     }
   }
@@ -396,14 +484,19 @@ bool InitializeApplication(HINSTANCE hInstance) {
       StopHookThread();
     }
 
+    TeardownSideMouseHook();
     if (Globals::g_hWindow)
       DestroyWindow(Globals::g_hWindow);
     UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
     CloseHandle(Globals::g_hSpamEvent);
     CloseHandle(Globals::g_hTurboLootEvent);
     CloseHandle(Globals::g_hTurboJumpEvent);
+    CloseHandle(Globals::g_hSuperglideEvent);
     DeleteCriticalSection(&Globals::g_csActiveKeys);
     Globals::g_hSpamEvent = NULL;
+    Globals::g_hTurboLootEvent = NULL;
+    Globals::g_hTurboJumpEvent = NULL;
+    Globals::g_hSuperglideEvent = NULL;
     return false;
   }
 
@@ -418,6 +511,7 @@ bool InitializeApplication(HINSTANCE hInstance) {
 void CleanupApplication() {
   std::cout << "--- Starting Application Cleanup ---" << std::endl;
 
+  TeardownSideMouseHook();
   StopSpamThread();
   StopTurboLootThread();
   StopTurboJumpThread();

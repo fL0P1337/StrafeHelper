@@ -147,6 +147,7 @@
     <ClInclude Include="InterceptionBackend.h" />
     <ClInclude Include="KbdHookBackend.h" />
     <ClInclude Include="KeyboardHook.h" />
+    <ClInclude Include="KeybindManager.h" />
     <ClInclude Include="SpamLogic.h" />
     <ClInclude Include="SuperglideLogic.h" />
     <ClInclude Include="TurboLogic.h" />
@@ -169,6 +170,7 @@
     <ClCompile Include="InterceptionBackend.cpp" />
     <ClCompile Include="KbdHookBackend.cpp" />
     <ClCompile Include="KeyboardHook.cpp" />
+    <ClCompile Include="KeybindManager.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="SpamLogic.cpp" />
     <ClCompile Include="SuperglideLogic.cpp" />
