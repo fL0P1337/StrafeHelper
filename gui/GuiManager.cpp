@@ -145,8 +145,10 @@ void GuiManager::Render() {
                   "StrafeHelper");
     ImGui::PopFont();
 
-    ImGui::SetCursorPos({160, 8});
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 10));
+    const float titleBarH = 51.0f;
+    ImGui::SetCursorPos({160, 0});
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                        ImVec2(4, (titleBarH - ImGui::GetTextLineHeight()) * 0.5f));
     ImGui::BeginGroup();
     {
       const float tabAreaStart = 160.0f;
@@ -228,7 +230,7 @@ void GuiManager::RenderConfigContent() {
     ImGui::SameLine(ImGui::GetContentRegionAvail().x -                         \
                     ImGui::CalcTextSize(_vbuf).x);                             \
     ImGui::TextDisabled("%s", _vbuf);                                          \
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,                             \
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,                            \
         ImVec2(ImGui::GetStyle().FramePadding.x, 2.0f));                       \
     ImGui::SetNextItemWidth(-FLT_MIN);                                         \
     if (ImGui::SliderInt("##" label, &(var), vmin, vmax, "")) {                \
@@ -296,15 +298,17 @@ void GuiManager::RenderConfigContent() {
     ImGui::EndGroup();
     ImGui::Unindent(kFeatureChildIndent);
   };
-  auto RenderBindModeSelector = [&](const char *id) {
-    int bindMode = Config::IsLocked.load(std::memory_order_relaxed) ? 1 : 0;
+  auto RenderBindModeSelector = [&](const char *id,
+                                    std::atomic<Config::KeybindMode> &mode) {
+    int bindMode = static_cast<int>(mode.load(std::memory_order_relaxed));
     const char *bindModes[] = {"Hold", "Toggle"};
     float comboWidth = ImGui::CalcTextSize("Toggle").x +
                        ImGui::GetStyle().FramePadding.x * 2.0f +
                        ImGui::GetFrameHeight();
     ImGui::SetNextItemWidth(comboWidth);
     if (ImGui::Combo(id, &bindMode, bindModes, IM_ARRAYSIZE(bindModes))) {
-      Config::IsLocked.store(bindMode == 1, std::memory_order_relaxed);
+      mode.store(static_cast<Config::KeybindMode>(bindMode),
+                 std::memory_order_relaxed);
       Config::SaveConfig();
     }
     ImGui::SameLine();
@@ -322,7 +326,7 @@ void GuiManager::RenderConfigContent() {
 
   if (BeginFeatureChildren(useSpam)) {
     RebindButton("Trigger Key", m_isRebinding, Config::KeySpamTrigger);
-    RenderBindModeSelector("##SpamBindMode");
+    RenderBindModeSelector("##SpamBindMode", Config::KeySpamTriggerMode);
 
     int delay = Config::SpamDelayMs.load();
     FULL_SLIDER_INT("Spam Delay", delay, 1, 100, "%dms",
@@ -353,7 +357,7 @@ void GuiManager::RenderConfigContent() {
 
   if (BeginFeatureChildren(useTurboLoot)) {
     RebindButton("Loot Key", m_isRebindingLootKey, Config::TurboLootKey);
-    RenderBindModeSelector("##LootBindMode");
+    RenderBindModeSelector("##LootBindMode", Config::TurboLootMode);
 
     int lootDelay = Config::TurboLootDelayMs.load();
     FULL_SLIDER_INT(
@@ -375,7 +379,7 @@ void GuiManager::RenderConfigContent() {
 
   if (BeginFeatureChildren(useTurboJump)) {
     RebindButton("Jump Key", m_isRebindingJumpKey, Config::TurboJumpKey);
-    RenderBindModeSelector("##JumpBindMode");
+    RenderBindModeSelector("##JumpBindMode", Config::TurboJumpMode);
 
     int jumpDelay = Config::TurboJumpDelayMs.load();
     FULL_SLIDER_INT(

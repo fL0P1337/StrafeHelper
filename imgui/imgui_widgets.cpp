@@ -2996,8 +2996,10 @@ bool ImGui::SliderScalar(const char* label, ImGuiDataType data_type, void* p_dat
     const float w = GetWindowWidth();
 
     const ImVec2 label_size = CalcTextSize(label, NULL, true);
-    const ImRect total_bb(window->DC.CursorPos, window->DC.CursorPos + ImVec2(w, label_size.y + 10));
-    const ImRect frame_bb(total_bb.Min + ImVec2(0, label_size.y + 5), total_bb.Max);
+    const bool has_visible_label = (label[0] != '#' || label[1] != '#');
+    const float label_h = has_visible_label ? label_size.y + 5.0f : 0.0f;
+    const ImRect total_bb(window->DC.CursorPos, window->DC.CursorPos + ImVec2(w, label_h + style.FramePadding.y * 2.0f));
+    const ImRect frame_bb(total_bb.Min + ImVec2(0, label_h), total_bb.Max);
 
     ItemSize(total_bb, style.FramePadding.y);
     if (!ItemAdd(total_bb, id, &frame_bb))

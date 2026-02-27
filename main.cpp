@@ -81,7 +81,12 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam,
       if (bottom)
         return HTBOTTOM;
 
-      if (pt.y < dragBorder || pt.y > (rc.bottom - dragBorder))
+      if (pt.y > (rc.bottom - dragBorder))
+        return HTCAPTION;
+
+      const int titleBarHeight = 51;
+      const int logoAreaRight = 160;
+      if (pt.y < titleBarHeight && pt.x < logoAreaRight)
         return HTCAPTION;
     }
     return hit;
