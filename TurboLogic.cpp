@@ -6,9 +6,22 @@
 #include "Utils.h"
 #include <atomic>
 #include <iostream>
+#include <random>
 #include <windows.h>
 
 namespace {
+
+DWORD ApplyJitter(DWORD baseDelay) {
+  if (!Config::EnableJitter.load(std::memory_order_relaxed))
+    return baseDelay;
+  const int jitter = Config::JitterMs.load(std::memory_order_relaxed);
+  if (jitter <= 0)
+    return baseDelay;
+  thread_local std::mt19937 rng(std::random_device{}());
+  std::uniform_int_distribution<int> dist(-jitter, jitter);
+  const int adjusted = static_cast<int>(baseDelay) + dist(rng);
+  return static_cast<DWORD>(adjusted < 1 ? 1 : adjusted);
+}
 
 // ---- Turbo Loot ----
 std::atomic<bool> g_stopTurboLootRequest{false};
@@ -22,9 +35,8 @@ DWORD WINAPI TurboLootThread(LPVOID) {
     const int vk = Config::TurboLootKey.load(std::memory_order_relaxed);
 
     if (enabled) {
-      // Check if feature should be active (handles both Hold and Toggle modes)
       if (KeybindManager::IsTurboLootActive()) {
-        timeout = Config::TurboLootDelayMs.load(std::memory_order_relaxed);
+        timeout = ApplyJitter(Config::TurboLootDelayMs.load(std::memory_order_relaxed));
       }
     }
 
@@ -36,13 +48,11 @@ DWORD WINAPI TurboLootThread(LPVOID) {
     if (!Config::EnableTurboLoot.load(std::memory_order_relaxed))
       continue;
 
-    // Check if feature should be active (handles both Hold and Toggle modes)
     if (!KeybindManager::IsTurboLootActive())
       continue;
 
     const int key = Config::TurboLootKey.load(std::memory_order_relaxed);
 
-    // Send key-down
     INPUT input = {INPUT_KEYBOARD};
     input.ki.wVk = key;
     input.ki.wScan = MapVirtualKey(key, MAPVK_VK_TO_VSC);
@@ -51,7 +61,7 @@ DWORD WINAPI TurboLootThread(LPVOID) {
     SendInput(1, &input, sizeof(INPUT));
 
     DWORD duration =
-        Config::TurboLootDurationMs.load(std::memory_order_relaxed);
+        ApplyJitter(Config::TurboLootDurationMs.load(std::memory_order_relaxed));
     if (duration > 0) {
       Sleep(duration);
       if (g_stopTurboLootRequest.load(std::memory_order_relaxed))
@@ -79,9 +89,8 @@ DWORD WINAPI TurboJumpThread(LPVOID) {
     const int vk = Config::TurboJumpKey.load(std::memory_order_relaxed);
 
     if (enabled) {
-      // Check if feature should be active (handles both Hold and Toggle modes)
       if (KeybindManager::IsTurboJumpActive()) {
-        timeout = Config::TurboJumpDelayMs.load(std::memory_order_relaxed);
+        timeout = ApplyJitter(Config::TurboJumpDelayMs.load(std::memory_order_relaxed));
       }
     }
 
@@ -93,13 +102,11 @@ DWORD WINAPI TurboJumpThread(LPVOID) {
     if (!Config::EnableTurboJump.load(std::memory_order_relaxed))
       continue;
 
-    // Check if feature should be active (handles both Hold and Toggle modes)
     if (!KeybindManager::IsTurboJumpActive())
       continue;
 
     const int key = Config::TurboJumpKey.load(std::memory_order_relaxed);
 
-    // Send key-down
     INPUT input = {INPUT_KEYBOARD};
     input.ki.wVk = key;
     input.ki.wScan = MapVirtualKey(key, MAPVK_VK_TO_VSC);
@@ -108,7 +115,7 @@ DWORD WINAPI TurboJumpThread(LPVOID) {
     SendInput(1, &input, sizeof(INPUT));
 
     DWORD duration =
-        Config::TurboJumpDurationMs.load(std::memory_order_relaxed);
+        ApplyJitter(Config::TurboJumpDurationMs.load(std::memory_order_relaxed));
     if (duration > 0) {
       Sleep(duration);
       if (g_stopTurboJumpRequest.load(std::memory_order_relaxed))

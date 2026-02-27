@@ -64,6 +64,10 @@ extern std::atomic<double> TargetFPS;
 extern std::atomic<KeybindMode> SuperglideMode;
 extern std::atomic<bool> SuperglideToggleActive;
 
+// Delay jitter — adds +/- random variance to all spam/turbo delays
+extern std::atomic<bool> EnableJitter;
+extern std::atomic<int> JitterMs; // max +/- offset applied to each delay cycle
+
 // Function to load configuration
 void LoadConfig();
 void SaveConfig();

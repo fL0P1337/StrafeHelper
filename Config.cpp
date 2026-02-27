@@ -51,6 +51,10 @@ std::atomic<double> TargetFPS{60.0};
 std::atomic<KeybindMode> SuperglideMode{KeybindMode::Hold};
 std::atomic<bool> SuperglideToggleActive{false};
 
+// Delay jitter
+std::atomic<bool> EnableJitter{false};
+std::atomic<int> JitterMs{3};
+
 // --- Implementation of LoadConfig ---
 void LoadConfig() {
   std::ifstream configFile(CONFIG_FILE_NAME);
@@ -178,6 +182,14 @@ void LoadConfig() {
         (void)std::stoi(value);
         SuperglideMode = KeybindMode::Hold;
       }
+      // Jitter
+      else if (key == "enable_jitter")
+        EnableJitter = (value == "true" || value == "1");
+      else if (key == "jitter_ms") {
+        int v = std::stoi(value);
+        if (v >= 0)
+          JitterMs = v;
+      }
     } catch (const std::exception &e) {
       Logger::GetInstance().Log("Warning: Invalid config value on line " +
                                 std::to_string(lineNumber) + " for key '" +
@@ -284,6 +296,8 @@ void SaveConfig() {
       {"target_fps", std::to_string(TargetFPS.load()), false},
       {"superglide_mode", std::to_string(static_cast<int>(KeybindMode::Hold)),
        false},
+      {"enable_jitter", EnableJitter.load() ? "true" : "false", false},
+      {"jitter_ms", std::to_string(JitterMs.load()), false},
   };
 
   auto trim = [](std::string &s) {

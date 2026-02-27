@@ -101,9 +101,34 @@ DWORD WINAPI SuperglideThread(LPVOID) {
     // 3. Crouch tap — fires at exactly 1 frame after Jump.
     InjectKeyTap(kCrouchVK);
 
-    // Cooldown: ignore re-triggers for 500 ms after each execution.
-    // Prevents key-hold auto-repeat or rapid presses from spamming the
-    // sequence.
+    // Record timing stats using the same formula as the practice tool:
+    //   elapsedFrames = elapsed_seconds / frameTime
+    //   if < 1 frame: chance = elapsedFrames * 100  (too early)
+    //   if < 2 frames: chance = (2 - elapsedFrames) * 100  (slightly late)
+    //   else: 0  (way too late)
+    {
+      const double elapsedTicks =
+          static_cast<double>(now.QuadPart - start.QuadPart);
+      const double elapsedSec = elapsedTicks / static_cast<double>(freq.QuadPart);
+      const double frameTimeSec = 1.0 / targetFPS;
+      const double elapsedFrames = elapsedSec / frameTimeSec;
+
+      double chance = 0.0;
+      if (elapsedFrames < 1.0)
+        chance = elapsedFrames * 100.0;
+      else if (elapsedFrames < 2.0)
+        chance = (2.0 - elapsedFrames) * 100.0;
+
+      const double errorMs = (elapsedSec - frameTimeSec) * 1000.0;
+
+      auto &stats = Globals::g_superglideStats;
+      const int idx =
+          stats.writeIdx.fetch_add(1, std::memory_order_relaxed) %
+          Globals::kSuperglideHistorySize;
+      stats.history[idx] = {elapsedFrames, chance, errorMs};
+      stats.count.fetch_add(1, std::memory_order_relaxed);
+    }
+
     Sleep(500);
   }
 

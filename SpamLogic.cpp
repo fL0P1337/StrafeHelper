@@ -1,18 +1,31 @@
 // SpamLogic.cpp
 #include "SpamLogic.h"
 #include "Config.h"
-#include "Globals.h" // <-- Add
+#include "Globals.h"
 #include "Utils.h"
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <random>
 #include <thread>
 #include <vector>
-#include <windows.h> // <-- Add
+#include <windows.h>
 
 
 namespace {
 std::atomic<bool> g_stopSpamThreadRequest = false;
+
+DWORD ApplyJitter(DWORD baseDelay) {
+  if (!Config::EnableJitter.load(std::memory_order_relaxed))
+    return baseDelay;
+  const int jitter = Config::JitterMs.load(std::memory_order_relaxed);
+  if (jitter <= 0)
+    return baseDelay;
+  thread_local std::mt19937 rng(std::random_device{}());
+  std::uniform_int_distribution<int> dist(-jitter, jitter);
+  const int adjusted = static_cast<int>(baseDelay) + dist(rng);
+  return static_cast<DWORD>(adjusted < 1 ? 1 : adjusted);
+}
 
 bool IsPhysicallyHeldMovementKey(int vkCode) {
   if (vkCode != 'W' && vkCode != 'A' && vkCode != 'S' && vkCode != 'D') {
@@ -78,7 +91,7 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
       const bool keysCurrentlyActive = !localActiveKeys.empty();
 
       if (keysCurrentlyActive) {
-        waitTimeout = spamDelay;
+        waitTimeout = ApplyJitter(spamDelay);
       }
     }
 
@@ -107,7 +120,7 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
     }
 
     DWORD keyDownDuration =
-        Config::SpamKeyDownDurationMs.load(std::memory_order_relaxed);
+        ApplyJitter(Config::SpamKeyDownDurationMs.load(std::memory_order_relaxed));
     if (keyDownDuration > 0) {
       Sleep(keyDownDuration);
       if (g_stopSpamThreadRequest.load(std::memory_order_relaxed)) {

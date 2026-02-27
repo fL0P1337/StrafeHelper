@@ -59,6 +59,23 @@ extern std::atomic<unsigned long long> g_spamKeysEpoch;
 extern CRITICAL_SECTION g_csActiveKeys;
 extern std::atomic<bool> g_isCSpamActive;
 
+// --- Superglide Stats ---
+struct SuperglideResult {
+  double elapsedFrames;
+  double chancePercent;
+  double errorMs;
+};
+
+constexpr int kSuperglideHistorySize = 32;
+
+struct SuperglideStats {
+  SuperglideResult history[kSuperglideHistorySize]{};
+  std::atomic<int> count{0};
+  std::atomic<int> writeIdx{0};
+};
+
+extern SuperglideStats g_superglideStats;
+
 // --- Tray Icon ---
 extern NOTIFYICONDATA g_nid;
 // Use #define for constants used in case statements for better compatibility

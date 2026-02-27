@@ -3,6 +3,7 @@
 #include "../Application.h"
 #include "../Config.h"
 #include "../Globals.h"
+#include "../KeybindManager.h"
 #include "../Logger.h"
 #include "../catrine/byte.h"
 #include "../catrine/elements.h"
@@ -10,6 +11,8 @@
 #include "../imgui/backends/imgui_impl_win32.h"
 #include "../imgui/imgui.h"
 #include "../imgui/imgui_internal.h"
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd,
@@ -181,12 +184,12 @@ void GuiManager::Render() {
     // Config tab needs scrolling enabled so all controls are reachable.
     ImGui::SetCursorPos({15, 65});
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-    const bool isConfigTab = (m_currentTab == TabSelection::CONFIG);
+    const bool isConsoleTab = (m_currentTab == TabSelection::CONSOLE);
     ImGuiWindowFlags childFlags =
-        isConfigTab
-            ? ImGuiWindowFlags_None // allow scroll + scrollbar on Config
-            : (ImGuiWindowFlags_NoScrollbar |
-               ImGuiWindowFlags_NoScrollWithMouse);
+        isConsoleTab
+            ? (ImGuiWindowFlags_NoScrollbar |
+               ImGuiWindowFlags_NoScrollWithMouse)
+            : ImGuiWindowFlags_None;
     ImGui::BeginChild("MainContent", ImVec2(size.x - 30, size.y - 80), false,
                       childFlags);
 
@@ -249,12 +252,33 @@ void GuiManager::RenderConfigContent() {
     }
   };
 
-  // Helper: generic key rebind button
+  // Returns the label of another feature using the same VK, or nullptr.
+  auto FindKeybindConflict = [](int vk, const std::atomic<int> &self)
+      -> const char * {
+    struct BindEntry {
+      const std::atomic<int> *key;
+      const std::atomic<bool> *enabled;
+      const char *name;
+    };
+    const BindEntry binds[] = {
+        {&Config::KeySpamTrigger, &Config::EnableSpam, "Lurch Trigger"},
+        {&Config::TurboLootKey, &Config::EnableTurboLoot, "Turbo Loot"},
+        {&Config::TurboJumpKey, &Config::EnableTurboJump, "Turbo Jump"},
+        {&Config::SuperglideBind, &Config::EnableSuperglide, "Superglide"},
+    };
+    for (const auto &b : binds) {
+      if (b.key == &self)
+        continue;
+      if (b.key->load(std::memory_order_relaxed) == vk)
+        return b.name;
+    }
+    return nullptr;
+  };
+
+  // Helper: generic key rebind button with conflict warning
   auto RebindButton = [&](const char *label, bool &rebinding,
                           std::atomic<int> &target) {
     if (rebinding) {
-      // Show as instructional text, not a button — the user must press a
-      // keyboard key; clicking would not help.
       ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.10f, 1.0f), "Press any key...");
       ImGui::SameLine();
       ImGui::TextDisabled("%s", label);
@@ -279,6 +303,17 @@ void GuiManager::RenderConfigContent() {
       }
       ImGui::SameLine();
       ImGui::TextDisabled("%s", label);
+    }
+
+    const int currentVk = target.load(std::memory_order_relaxed);
+    const char *conflict = FindKeybindConflict(currentVk, target);
+    if (conflict) {
+      char warnBuf[128];
+      char conflictKeyName[64] = "?";
+      VkToName(currentVk, conflictKeyName, sizeof(conflictKeyName));
+      snprintf(warnBuf, sizeof(warnBuf), "Conflict: '%s' is also used by %s",
+               conflictKeyName, conflict);
+      ImGui::TextColored(ImVec4(0.95f, 0.40f, 0.30f, 1.0f), "%s", warnBuf);
     }
   };
 
@@ -323,10 +358,12 @@ void GuiManager::RenderConfigContent() {
     Config::EnableSpam.store(useSpam);
     Config::SaveConfig();
   }
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+    ImGui::SetTooltip("Spams movement keys to change air-strafe directions.");
 
   if (BeginFeatureChildren(useSpam)) {
     RebindButton("Trigger Key", m_isRebinding, Config::KeySpamTrigger);
-    RenderBindModeSelector("##SpamBindMode", Config::KeySpamTriggerMode);
+    RenderBindModeSelector("Bind Mode", Config::KeySpamTriggerMode);
 
     int delay = Config::SpamDelayMs.load();
     FULL_SLIDER_INT("Spam Delay", delay, 1, 100, "%dms",
@@ -344,6 +381,8 @@ void GuiManager::RenderConfigContent() {
     Config::EnableSnapTap.store(useSnapTap);
     Config::SaveConfig();
   }
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+    ImGui::SetTooltip("Prevents simultaneous movement key conflicts (A+D / W+S).");
 
   ImGui::Spacing();
   ImGui::TextDisabled("Turbo Functions");
@@ -354,10 +393,12 @@ void GuiManager::RenderConfigContent() {
     Config::EnableTurboLoot.store(useTurboLoot);
     Config::SaveConfig();
   }
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+    ImGui::SetTooltip("Spams your loot key, useful for fast-looting.");
 
   if (BeginFeatureChildren(useTurboLoot)) {
     RebindButton("Loot Key", m_isRebindingLootKey, Config::TurboLootKey);
-    RenderBindModeSelector("##LootBindMode", Config::TurboLootMode);
+    RenderBindModeSelector("Bind Mode", Config::TurboLootMode);
 
     int lootDelay = Config::TurboLootDelayMs.load();
     FULL_SLIDER_INT(
@@ -376,10 +417,12 @@ void GuiManager::RenderConfigContent() {
     Config::EnableTurboJump.store(useTurboJump);
     Config::SaveConfig();
   }
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+    ImGui::SetTooltip("Spams the jump key, useful for bunnyhopping.");
 
   if (BeginFeatureChildren(useTurboJump)) {
     RebindButton("Jump Key", m_isRebindingJumpKey, Config::TurboJumpKey);
-    RenderBindModeSelector("##JumpBindMode", Config::TurboJumpMode);
+    RenderBindModeSelector("Bind Mode", Config::TurboJumpMode);
 
     int jumpDelay = Config::TurboJumpDelayMs.load();
     FULL_SLIDER_INT(
@@ -404,6 +447,8 @@ void GuiManager::RenderConfigContent() {
     Config::EnableSuperglide.store(useSuperglide);
     Config::SaveConfig();
   }
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+    ImGui::SetTooltip("Automates the frame-perfect Jump -> Crouch sequence");
 
   if (BeginFeatureChildren(useSuperglide)) {
     RebindButton("Superglide Bind", m_isRebindingSuperglideKey,
@@ -561,6 +606,37 @@ void GuiManager::RenderConfigContent() {
 void GuiManager::RenderConsoleContent() {
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 8));
 
+  ImGui::TextDisabled("Delay Jitter");
+  ImGui::Separator();
+  {
+    bool useJitter = Config::EnableJitter.load(std::memory_order_relaxed);
+    if (ImGui::Checkbox("Enable Jitter", &useJitter)) {
+      Config::EnableJitter.store(useJitter, std::memory_order_relaxed);
+      Config::SaveConfig();
+    }
+    if (useJitter) {
+      ImGui::Indent(16.0f);
+      int jitterVal = Config::JitterMs.load(std::memory_order_relaxed);
+      ImGui::Text("Jitter Range");
+      char jBuf[16];
+      snprintf(jBuf, sizeof(jBuf), "+/-%dms", jitterVal);
+      ImGui::SameLine(ImGui::GetContentRegionAvail().x -
+                      ImGui::CalcTextSize(jBuf).x);
+      ImGui::TextDisabled("%s", jBuf);
+      ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+          ImVec2(ImGui::GetStyle().FramePadding.x, 2.0f));
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      if (ImGui::SliderInt("##JitterMs", &jitterVal, 1, 20, "")) {
+        Config::JitterMs.store(jitterVal, std::memory_order_relaxed);
+        Config::SaveConfig();
+      }
+      ImGui::PopStyleVar();
+      ImGui::TextDisabled("Randomizes spam/turbo delays by +/- this amount");
+      ImGui::Unindent(16.0f);
+    }
+  }
+
+  ImGui::Spacing();
   ImGui::TextDisabled("Application Logs");
   ImGui::SameLine(ImGui::GetWindowWidth() - 55);
   if (ImGui::SmallButton("Clear")) {
@@ -583,26 +659,246 @@ void GuiManager::RenderConsoleContent() {
 }
 
 void GuiManager::RenderStateContent() {
-  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6, 3));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 5));
 
-  ImGui::Text("State");
+  const ImVec4 colOn = ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
+  const ImVec4 colOff = ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
+  const ImVec4 colActive = ImVec4(0.4f, 0.85f, 1.0f, 1.0f);
+  const ImVec4 colLabel = ImVec4(0.65f, 0.65f, 0.72f, 1.0f);
+
+  auto StatusDot = [&](bool active) {
+    ImGui::TextColored(active ? colOn : colOff, active ? "[ON] " : "[OFF]");
+  };
+
+  auto Tooltip = [](const char *text) {
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+      ImGui::BeginTooltip();
+      ImGui::PushTextWrapPos(280.0f);
+      ImGui::TextUnformatted(text);
+      ImGui::PopTextWrapPos();
+      ImGui::EndTooltip();
+    }
+  };
+
+  // ---- Input Backend ----
+  ImGui::TextDisabled("Input Backend");
   ImGui::Separator();
+  {
+    const int backend = Config::SelectedBackend.load(std::memory_order_relaxed);
+    const bool hookOk = (backend == 0)
+                            ? (Globals::g_hHookThread != NULL)
+                            : (Globals::g_hSuperglideThread != NULL ||
+                               Globals::g_hSpamThread != NULL);
+    ImGui::Text("Backend:");
+    ImGui::SameLine();
+    ImGui::TextColored(hookOk ? colOn : ImVec4(0.9f, 0.3f, 0.3f, 1.0f),
+                       "%s", backend == 0 ? "WinHook" : "Interception");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)){     
+      ImGui::SetTooltip(
+        "The active input capture backend.\n"
+        "WinHook uses a low-level keyboard hook.\n"
+        "Interception uses a kernel-mode filter driver."
+    );
+    }
+  }
+
   ImGui::Spacing();
 
-  ImGui::Text("Hook: %s", Globals::g_hHookThread != NULL ? "OK" : "--");
-  ImGui::Spacing();
-
+  // ---- Movement Keys ----
+  ImGui::TextDisabled("Movement Keys");
+  ImGui::Separator();
   ImGui::Text("WASD:");
   for (int k : {'W', 'A', 'S', 'D'}) {
     bool down = Globals::g_KeyInfo[k].physicalKeyDown.load();
     ImGui::SameLine();
-    ImGui::TextColored(down ? ImVec4(0.4f, 1.0f, 0.4f, 1.0f)
-                            : ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
-                       "%c", k);
+    ImGui::TextColored(down ? colOn : colOff, "%c", k);
   }
 
   ImGui::Spacing();
-  ImGui::Text("Spam: %s", Globals::g_isCSpamActive.load() ? "ON" : "OFF");
+
+  // ---- Feature Status ----
+  ImGui::TextDisabled("Feature Status");
+  ImGui::Separator();
+
+  // Lurch Strafing
+  {
+    const bool enabled = Config::EnableSpam.load(std::memory_order_relaxed);
+    const bool active =
+        enabled && Globals::g_isCSpamActive.load(std::memory_order_relaxed);
+    StatusDot(active);
+    ImGui::SameLine();
+    ImGui::TextColored(enabled ? colLabel : colOff, "Lurch Strafing");
+    if (active) {
+      ImGui::Indent(16.0f);
+      EnterCriticalSection(&Globals::g_csActiveKeys);
+      const auto keys = Globals::g_activeSpamKeys;
+      LeaveCriticalSection(&Globals::g_csActiveKeys);
+      if (!keys.empty()) {
+        ImGui::TextColored(colActive, "Spamming:");
+        for (int vk : keys) {
+          ImGui::SameLine();
+          ImGui::Text("%c", static_cast<char>(vk));
+        }
+      }
+      ImGui::Unindent(16.0f);
+    }
+  }
+
+  // SnapTap
+  {
+    const bool enabled = Config::EnableSnapTap.load(std::memory_order_relaxed);
+    StatusDot(enabled);
+    ImGui::SameLine();
+    ImGui::TextColored(enabled ? colLabel : colOff, "SnapTap (SOCD)");
+  }
+
+  // Turbo Loot
+  {
+    const bool enabled = Config::EnableTurboLoot.load(std::memory_order_relaxed);
+    const bool active = enabled && KeybindManager::IsTurboLootActive();
+    StatusDot(active);
+    ImGui::SameLine();
+    ImGui::TextColored(enabled ? colLabel : colOff, "Turbo Loot");
+    if (active) {
+      ImGui::Indent(16.0f);
+      ImGui::TextColored(colActive, "Spamming @ %dms",
+                         Config::TurboLootDelayMs.load(std::memory_order_relaxed));
+      ImGui::Unindent(16.0f);
+    }
+  }
+
+  // Turbo Jump
+  {
+    const bool enabled = Config::EnableTurboJump.load(std::memory_order_relaxed);
+    const bool active = enabled && KeybindManager::IsTurboJumpActive();
+    StatusDot(active);
+    ImGui::SameLine();
+    ImGui::TextColored(enabled ? colLabel : colOff, "Turbo Jump");
+    if (active) {
+      ImGui::Indent(16.0f);
+      ImGui::TextColored(colActive, "Spamming @ %dms",
+                         Config::TurboJumpDelayMs.load(std::memory_order_relaxed));
+      ImGui::Unindent(16.0f);
+    }
+  }
+
+  // Superglide
+  {
+    const bool enabled = Config::EnableSuperglide.load(std::memory_order_relaxed);
+    StatusDot(enabled);
+    ImGui::SameLine();
+    ImGui::TextColored(enabled ? colLabel : colOff, "Superglide");
+  }
+
+  // Jitter
+  {
+    const bool enabled = Config::EnableJitter.load(std::memory_order_relaxed);
+    StatusDot(enabled);
+    ImGui::SameLine();
+    ImGui::TextColored(enabled ? colLabel : colOff, "Delay Jitter");
+    if (enabled) {
+      ImGui::Indent(16.0f);
+      ImGui::TextColored(colActive, "+/-%dms",
+                         Config::JitterMs.load(std::memory_order_relaxed));
+      ImGui::Unindent(16.0f);
+    }
+  }
+
+  ImGui::Spacing();
+
+  // ---- Superglide Timing Stats ----
+  ImGui::TextDisabled("Superglide Timing");
+  ImGui::Separator();
+
+  const auto &stats = Globals::g_superglideStats;
+  const int totalCount = stats.count.load(std::memory_order_relaxed);
+
+  if (totalCount == 0) {
+    ImGui::TextColored(colOff, "No executions yet.");
+    Tooltip("Trigger a superglide to see timing accuracy and success rate "
+            "statistics here.");
+  } else {
+    const int historyLen =
+        (totalCount < Globals::kSuperglideHistorySize)
+            ? totalCount
+            : Globals::kSuperglideHistorySize;
+
+    double sumChance = 0.0;
+    double lastChance = 0.0;
+    double lastFrames = 0.0;
+    double lastErrorMs = 0.0;
+    double minError = 1e9;
+    double maxError = -1e9;
+    float chancePlot[Globals::kSuperglideHistorySize]{};
+
+    const int wIdx = stats.writeIdx.load(std::memory_order_relaxed);
+    for (int i = 0; i < historyLen; ++i) {
+      const int ri =
+          (wIdx - historyLen + i + Globals::kSuperglideHistorySize * 2) %
+          Globals::kSuperglideHistorySize;
+      const auto &r = stats.history[ri];
+      sumChance += r.chancePercent;
+      if (r.errorMs < minError)
+        minError = r.errorMs;
+      if (r.errorMs > maxError)
+        maxError = r.errorMs;
+      chancePlot[i] = static_cast<float>(r.chancePercent);
+      if (i == historyLen - 1) {
+        lastChance = r.chancePercent;
+        lastFrames = r.elapsedFrames;
+        lastErrorMs = r.errorMs;
+      }
+    }
+
+    const double avgChance = sumChance / historyLen;
+
+    ImGui::Text("Total Executions:");
+    ImGui::SameLine();
+    ImGui::TextColored(colActive, "%d", totalCount);
+
+    ImGui::Text("Last:");
+    ImGui::SameLine();
+    const ImVec4 chanceCol =
+        (lastChance >= 90.0) ? colOn
+        : (lastChance >= 50.0)
+            ? ImVec4(0.95f, 0.85f, 0.20f, 1.0f)
+            : ImVec4(0.95f, 0.40f, 0.30f, 1.0f);
+    ImGui::TextColored(chanceCol, "%.1f%% chance", lastChance);
+    ImGui::SameLine();
+    ImGui::TextColored(colLabel, "(%.3f frames, %+.2fms error)",
+                       lastFrames, lastErrorMs);
+    Tooltip("Success probability of the most recent superglide execution. "
+            "Based on the Apex Superglide Practice Tool formula: "
+            "1 frame = 100%%, 0 or 2 frames = 0%%.");
+
+    ImGui::Text("Average (last %d):", historyLen);
+    ImGui::SameLine();
+    const ImVec4 avgCol =
+        (avgChance >= 90.0) ? colOn
+        : (avgChance >= 50.0)
+            ? ImVec4(0.95f, 0.85f, 0.20f, 1.0f)
+            : ImVec4(0.95f, 0.40f, 0.30f, 1.0f);
+    ImGui::TextColored(avgCol, "%.1f%%", avgChance);
+
+    ImGui::Text("Error Range:");
+    ImGui::SameLine();
+    ImGui::TextColored(colLabel, "%+.2fms to %+.2fms", minError, maxError);
+    Tooltip("Timing error relative to the ideal 1-frame delay. "
+            "Negative = crouch fired early, positive = late. "
+            "Closer to 0 is better.");
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("Success History");
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram,
+                          ImVec4(0.35f, 0.75f, 0.35f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,
+                          ImVec4(0.12f, 0.14f, 0.20f, 1.0f));
+    ImGui::PlotHistogram("##SGHistory", chancePlot, historyLen, 0, nullptr,
+                         0.0f, 100.0f, ImVec2(-FLT_MIN, 50));
+    ImGui::PopStyleColor(2);
+    Tooltip("Per-execution success probability. Each bar represents one "
+            "superglide. Height = chance percentage (100%% = perfect).");
+  }
 
   ImGui::PopStyleVar();
 }
