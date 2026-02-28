@@ -120,15 +120,11 @@ void LoadConfig() {
         EnableSnapTap = (value == "true" || value == "1");
       else if (key == "KEY_SPAM_TRIGGER") {
         if (!value.empty()) {
-          SHORT vkScanResult = VkKeyScanA(value[0]);
-          if (vkScanResult != -1) {
-            KeySpamTrigger = LOBYTE(vkScanResult);
+          // If value is a single digit/letter, treat as char. Otherwise try parse as int.
+          if (value.length() == 1 && isalnum(value[0])) {
+             KeySpamTrigger = static_cast<int>(toupper(value[0]));
           } else {
-            KeySpamTrigger = static_cast<int>(toupper(value[0]));
-            Logger::GetInstance().Log(
-                "Warning: Could not map config key '" +
-                std::string(1, value[0]) +
-                "' via VkKeyScanA. Using direct char value.");
+             try { KeySpamTrigger = std::stoi(value); } catch(...) {}
           }
         }
       }
@@ -139,8 +135,13 @@ void LoadConfig() {
       // Turbo Loot
       else if (key == "enable_turbo_loot")
         EnableTurboLoot = (value == "true" || value == "1");
-      else if (key == "turbo_loot_key")
-        TurboLootKey = std::stoi(value);
+      else if (key == "turbo_loot_key") {
+        if (!value.empty() && value.length() == 1 && isalnum(value[0])) {
+           TurboLootKey = static_cast<int>(toupper(value[0]));
+        } else {
+           try { TurboLootKey = std::stoi(value); } catch(...) {}
+        }
+      }
       else if (key == "turbo_loot_delay")
         TurboLootDelayMs = std::stoi(value);
       else if (key == "turbo_loot_duration")
@@ -152,8 +153,13 @@ void LoadConfig() {
       // Turbo Jump
       else if (key == "enable_turbo_jump")
         EnableTurboJump = (value == "true" || value == "1");
-      else if (key == "turbo_jump_key")
-        TurboJumpKey = std::stoi(value);
+      else if (key == "turbo_jump_key") {
+        if (!value.empty() && value.length() == 1 && isalnum(value[0])) {
+           TurboJumpKey = static_cast<int>(toupper(value[0]));
+        } else {
+           try { TurboJumpKey = std::stoi(value); } catch(...) {}
+        }
+      }
       else if (key == "turbo_jump_delay")
         TurboJumpDelayMs = std::stoi(value);
       else if (key == "turbo_jump_duration")
@@ -170,8 +176,13 @@ void LoadConfig() {
       // Superglide
       else if (key == "enable_superglide")
         EnableSuperglide = (value == "true" || value == "1");
-      else if (key == "superglide_bind")
-        SuperglideBind = std::stoi(value);
+      else if (key == "superglide_bind") {
+        if (!value.empty() && value.length() == 1 && isalnum(value[0])) {
+           SuperglideBind = static_cast<int>(toupper(value[0]));
+        } else {
+           try { SuperglideBind = std::stoi(value); } catch(...) {}
+        }
+      }
       else if (key == "target_fps") {
         double fps = std::stod(value);
         if (fps > 0.0)
@@ -244,17 +255,26 @@ void SaveConfig() {
   const std::string isLockedStr = IsLocked.load() ? "true" : "false";
   const std::string enableSpamStr = EnableSpam.load() ? "true" : "false";
   const std::string snapTapStr = EnableSnapTap.load() ? "true" : "false";
-  const std::string triggerStr(1, static_cast<char>(KeySpamTrigger.load()));
+  // Helper to format key value (char if printable, else int)
+  auto FormatKey = [](int vk) -> std::string {
+    if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) {
+      return std::string(1, static_cast<char>(vk));
+    }
+    return std::to_string(vk);
+  };
+
+  const std::string triggerStr = FormatKey(KeySpamTrigger.load());
   const std::string turboLootStr = EnableTurboLoot.load() ? "true" : "false";
-  const std::string turboLootKeyStr = std::to_string(TurboLootKey.load());
+  const std::string turboLootKeyStr = FormatKey(TurboLootKey.load());
   const std::string turboLootDelayStr = std::to_string(TurboLootDelayMs.load());
   const std::string turboLootDurStr =
       std::to_string(TurboLootDurationMs.load());
   const std::string turboJumpStr = EnableTurboJump.load() ? "true" : "false";
-  const std::string turboJumpKeyStr = std::to_string(TurboJumpKey.load());
+  const std::string turboJumpKeyStr = FormatKey(TurboJumpKey.load());
   const std::string turboJumpDelayStr = std::to_string(TurboJumpDelayMs.load());
   const std::string turboJumpDurStr =
       std::to_string(TurboJumpDurationMs.load());
+  const std::string superglideBindStr = FormatKey(SuperglideBind.load());
 
   // Update-in-place: preserve unknown keys/comments, replace known keys, append
   // missing ones.
@@ -292,7 +312,7 @@ void SaveConfig() {
       {"turbo_jump_mode", std::to_string(static_cast<int>(TurboJumpMode.load())), false},
       {"input_backend", std::to_string(SelectedBackend.load()), false},
       {"enable_superglide", EnableSuperglide.load() ? "true" : "false", false},
-      {"superglide_bind", std::to_string(SuperglideBind.load()), false},
+      {"superglide_bind", superglideBindStr, false},
       {"target_fps", std::to_string(TargetFPS.load()), false},
       {"superglide_mode", std::to_string(static_cast<int>(KeybindMode::Hold)),
        false},

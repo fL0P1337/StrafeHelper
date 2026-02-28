@@ -390,7 +390,7 @@ void GuiManager::RenderConfigContent() {
 
   if (BeginFeatureChildren(useTurboLoot)) {
     RebindButton("Loot Key", Config::TurboLootKey);
-    RenderBindModeSelector("Turbo Loot", Config::TurboLootMode);
+    RenderBindModeSelector("Turbo Loot##Mode", Config::TurboLootMode);
 
     int lootDelay = Config::TurboLootDelayMs.load();
     FULL_SLIDER_INT(
@@ -414,7 +414,7 @@ void GuiManager::RenderConfigContent() {
 
   if (BeginFeatureChildren(useTurboJump)) {
     RebindButton("Jump Key", Config::TurboJumpKey);
-    RenderBindModeSelector("Turbo Jump", Config::TurboJumpMode);
+    RenderBindModeSelector("Turbo Jump##Mode", Config::TurboJumpMode);
 
     int jumpDelay = Config::TurboJumpDelayMs.load();
     FULL_SLIDER_INT(
