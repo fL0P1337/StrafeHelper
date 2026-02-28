@@ -5,9 +5,9 @@
 #include <atomic>
 #include <map>   // <-- Add
 #include <mutex> // Or keep windows.h for CRITICAL_SECTION
-#include <shellapi.h>
 #include <vector> // <-- Add
 #include <windows.h>
+#include <shellapi.h>
 
 namespace Globals {
 
@@ -75,6 +75,9 @@ struct SuperglideStats {
 };
 
 extern SuperglideStats g_superglideStats;
+
+// --- Binding State ---
+extern std::atomic<std::atomic<int>*> g_bindingTarget;
 
 // --- Tray Icon ---
 extern NOTIFYICONDATA g_nid;

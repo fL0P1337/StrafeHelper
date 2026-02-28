@@ -218,6 +218,11 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
   bool isKeyDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
   bool isKeyUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
 
+  // Handle dynamic keybinding capture
+  if (KeybindManager::HandleBind(vkCode, isKeyDown)) {
+    return 1;
+  }
+
   if (pKeybd->flags & LLKHF_INJECTED) {
     return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam); // Globals::
   }

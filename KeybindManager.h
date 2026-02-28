@@ -46,4 +46,7 @@ bool IsTurboLootActive();
 bool IsTurboJumpActive();
 bool IsSuperglideActive();
 
+// Handle dynamic keybinding (returns true if event was consumed/suppressed)
+bool HandleBind(int vkCode, bool isKeyDown);
+
 } // namespace KeybindManager

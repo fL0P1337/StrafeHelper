@@ -47,6 +47,7 @@ private:
   using hardware_id_fn = decltype(&interception_get_hardware_id);
   using is_invalid_fn = decltype(&interception_is_invalid);
   using is_keyboard_fn = decltype(&interception_is_keyboard);
+  using is_mouse_fn = decltype(&interception_is_mouse);
 
   [[nodiscard]] bool ResolveApi() noexcept;
   [[nodiscard]] bool EnumerateKeyboards() noexcept;
@@ -72,6 +73,7 @@ private:
   hardware_id_fn interceptionGetHardwareId_ = nullptr;
   is_invalid_fn interceptionIsInvalid_ = nullptr;
   is_keyboard_fn interceptionIsKeyboard_ = nullptr;
+  is_mouse_fn interceptionIsMouse_ = nullptr;
 
   InterceptionContext context_ = nullptr;
   std::vector<InterceptionDevice> keyboardDevices_{};

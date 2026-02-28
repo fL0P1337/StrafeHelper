@@ -150,8 +150,9 @@ void GuiManager::Render() {
 
     const float titleBarH = 51.0f;
     ImGui::SetCursorPos({160, 0});
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                        ImVec2(4, (titleBarH - ImGui::GetTextLineHeight()) * 0.5f));
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_FramePadding,
+        ImVec2(4, (titleBarH - ImGui::GetTextLineHeight()) * 0.5f));
     ImGui::BeginGroup();
     {
       const float tabAreaStart = 160.0f;
@@ -185,11 +186,10 @@ void GuiManager::Render() {
     ImGui::SetCursorPos({15, 65});
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
     const bool isConsoleTab = (m_currentTab == TabSelection::CONSOLE);
-    ImGuiWindowFlags childFlags =
-        isConsoleTab
-            ? (ImGuiWindowFlags_NoScrollbar |
-               ImGuiWindowFlags_NoScrollWithMouse)
-            : ImGuiWindowFlags_None;
+    ImGuiWindowFlags childFlags = isConsoleTab
+                                      ? (ImGuiWindowFlags_NoScrollbar |
+                                         ImGuiWindowFlags_NoScrollWithMouse)
+                                      : ImGuiWindowFlags_None;
     ImGui::BeginChild("MainContent", ImVec2(size.x - 30, size.y - 80), false,
                       childFlags);
 
@@ -234,7 +234,7 @@ void GuiManager::RenderConfigContent() {
                     ImGui::CalcTextSize(_vbuf).x);                             \
     ImGui::TextDisabled("%s", _vbuf);                                          \
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,                            \
-        ImVec2(ImGui::GetStyle().FramePadding.x, 2.0f));                       \
+                        ImVec2(ImGui::GetStyle().FramePadding.x, 2.0f));       \
     ImGui::SetNextItemWidth(-FLT_MIN);                                         \
     if (ImGui::SliderInt("##" label, &(var), vmin, vmax, "")) {                \
       saveFn;                                                                  \
@@ -253,8 +253,8 @@ void GuiManager::RenderConfigContent() {
   };
 
   // Returns the label of another feature using the same VK, or nullptr.
-  auto FindKeybindConflict = [](int vk, const std::atomic<int> &self)
-      -> const char * {
+  auto FindKeybindConflict = [](int vk,
+                                const std::atomic<int> &self) -> const char * {
     struct BindEntry {
       const std::atomic<int> *key;
       const std::atomic<bool> *enabled;
@@ -276,30 +276,21 @@ void GuiManager::RenderConfigContent() {
   };
 
   // Helper: generic key rebind button with conflict warning
-  auto RebindButton = [&](const char *label, bool &rebinding,
-                          std::atomic<int> &target) {
-    if (rebinding) {
-      ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.10f, 1.0f), "Press any key...");
+  auto RebindButton = [&](const char *label, std::atomic<int> &target) {
+    bool isListening = (Globals::g_bindingTarget.load() == &target);
+
+    if (isListening) {
+      // Visual feedback for listening mode
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.75f, 0.10f, 1.0f));
+      ImGui::Text("Press any key...");
+      ImGui::PopStyleColor();
       ImGui::SameLine();
       ImGui::TextDisabled("%s", label);
-      for (int i = 1; i < 256; i++) {
-        if (i == VK_LBUTTON || i == VK_RBUTTON || i == VK_MBUTTON ||
-            i == VK_ESCAPE)
-          continue;
-        if (GetAsyncKeyState(i) & 0x8000) {
-          target.store(i);
-          Config::SaveConfig();
-          Logger::GetInstance().Log(std::string("Rebound ") + label +
-                                    " to VK " + std::to_string(i));
-          rebinding = false;
-          break;
-        }
-      }
     } else {
       char keyName[64] = "Unknown Key";
       VkToName(target.load(), keyName, sizeof(keyName));
       if (ImGui::Button(keyName, ImVec2(0, 0))) {
-        rebinding = true;
+        Globals::g_bindingTarget.store(&target);
       }
       ImGui::SameLine();
       ImGui::TextDisabled("%s", label);
@@ -362,8 +353,8 @@ void GuiManager::RenderConfigContent() {
     ImGui::SetTooltip("Spams movement keys to change air-strafe directions.");
 
   if (BeginFeatureChildren(useSpam)) {
-    RebindButton("Trigger Key", m_isRebinding, Config::KeySpamTrigger);
-    RenderBindModeSelector("Bind Mode", Config::KeySpamTriggerMode);
+    RebindButton("Trigger Key", Config::KeySpamTrigger);
+    RenderBindModeSelector("Lurch Strafe", Config::KeySpamTriggerMode);
 
     int delay = Config::SpamDelayMs.load();
     FULL_SLIDER_INT("Spam Delay", delay, 1, 100, "%dms",
@@ -382,7 +373,8 @@ void GuiManager::RenderConfigContent() {
     Config::SaveConfig();
   }
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-    ImGui::SetTooltip("Prevents simultaneous movement key conflicts (A+D / W+S).");
+    ImGui::SetTooltip(
+        "Prevents simultaneous movement key conflicts (A+D / W+S).");
 
   ImGui::Spacing();
   ImGui::TextDisabled("Turbo Functions");
@@ -397,8 +389,8 @@ void GuiManager::RenderConfigContent() {
     ImGui::SetTooltip("Spams your loot key, useful for fast-looting.");
 
   if (BeginFeatureChildren(useTurboLoot)) {
-    RebindButton("Loot Key", m_isRebindingLootKey, Config::TurboLootKey);
-    RenderBindModeSelector("Bind Mode", Config::TurboLootMode);
+    RebindButton("Loot Key", Config::TurboLootKey);
+    RenderBindModeSelector("Turbo Loot", Config::TurboLootMode);
 
     int lootDelay = Config::TurboLootDelayMs.load();
     FULL_SLIDER_INT(
@@ -421,8 +413,8 @@ void GuiManager::RenderConfigContent() {
     ImGui::SetTooltip("Spams the jump key, useful for bunnyhopping.");
 
   if (BeginFeatureChildren(useTurboJump)) {
-    RebindButton("Jump Key", m_isRebindingJumpKey, Config::TurboJumpKey);
-    RenderBindModeSelector("Bind Mode", Config::TurboJumpMode);
+    RebindButton("Jump Key", Config::TurboJumpKey);
+    RenderBindModeSelector("Turbo Jump", Config::TurboJumpMode);
 
     int jumpDelay = Config::TurboJumpDelayMs.load();
     FULL_SLIDER_INT(
@@ -451,8 +443,7 @@ void GuiManager::RenderConfigContent() {
     ImGui::SetTooltip("Automates the frame-perfect Jump -> Crouch sequence");
 
   if (BeginFeatureChildren(useSuperglide)) {
-    RebindButton("Superglide Bind", m_isRebindingSuperglideKey,
-                 Config::SuperglideBind);
+    RebindButton("Superglide Bind", Config::SuperglideBind);
 
     // Target FPS slider — stored as double, displayed via float local copy
     float fps = static_cast<float>(Config::TargetFPS.load());
@@ -463,7 +454,7 @@ void GuiManager::RenderConfigContent() {
                     ImGui::CalcTextSize(fpsBuf).x);
     ImGui::TextDisabled("%s", fpsBuf);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-        ImVec2(ImGui::GetStyle().FramePadding.x, 2.0f));
+                        ImVec2(ImGui::GetStyle().FramePadding.x, 2.0f));
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::SliderFloat("##SuperglideFPS", &fps, 30.0f, 300.0f, "")) {
       Config::TargetFPS.store(static_cast<double>(fps));
@@ -624,7 +615,7 @@ void GuiManager::RenderConsoleContent() {
                       ImGui::CalcTextSize(jBuf).x);
       ImGui::TextDisabled("%s", jBuf);
       ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-          ImVec2(ImGui::GetStyle().FramePadding.x, 2.0f));
+                          ImVec2(ImGui::GetStyle().FramePadding.x, 2.0f));
       ImGui::SetNextItemWidth(-FLT_MIN);
       if (ImGui::SliderInt("##JitterMs", &jitterVal, 1, 20, "")) {
         Config::JitterMs.store(jitterVal, std::memory_order_relaxed);
@@ -691,14 +682,12 @@ void GuiManager::RenderStateContent() {
                                Globals::g_hSpamThread != NULL);
     ImGui::Text("Backend:");
     ImGui::SameLine();
-    ImGui::TextColored(hookOk ? colOn : ImVec4(0.9f, 0.3f, 0.3f, 1.0f),
-                       "%s", backend == 0 ? "WinHook" : "Interception");
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)){     
-      ImGui::SetTooltip(
-        "The active input capture backend.\n"
-        "WinHook uses a low-level keyboard hook.\n"
-        "Interception uses a kernel-mode filter driver."
-    );
+    ImGui::TextColored(hookOk ? colOn : ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "%s",
+                       backend == 0 ? "WinHook" : "Interception");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+      ImGui::SetTooltip("The active input capture backend.\n"
+                        "WinHook uses a low-level keyboard hook.\n"
+                        "Interception uses a kernel-mode filter driver.");
     }
   }
 
@@ -754,37 +743,42 @@ void GuiManager::RenderStateContent() {
 
   // Turbo Loot
   {
-    const bool enabled = Config::EnableTurboLoot.load(std::memory_order_relaxed);
+    const bool enabled =
+        Config::EnableTurboLoot.load(std::memory_order_relaxed);
     const bool active = enabled && KeybindManager::IsTurboLootActive();
     StatusDot(active);
     ImGui::SameLine();
     ImGui::TextColored(enabled ? colLabel : colOff, "Turbo Loot");
     if (active) {
       ImGui::Indent(16.0f);
-      ImGui::TextColored(colActive, "Spamming @ %dms",
-                         Config::TurboLootDelayMs.load(std::memory_order_relaxed));
+      ImGui::TextColored(
+          colActive, "Spamming @ %dms",
+          Config::TurboLootDelayMs.load(std::memory_order_relaxed));
       ImGui::Unindent(16.0f);
     }
   }
 
   // Turbo Jump
   {
-    const bool enabled = Config::EnableTurboJump.load(std::memory_order_relaxed);
+    const bool enabled =
+        Config::EnableTurboJump.load(std::memory_order_relaxed);
     const bool active = enabled && KeybindManager::IsTurboJumpActive();
     StatusDot(active);
     ImGui::SameLine();
     ImGui::TextColored(enabled ? colLabel : colOff, "Turbo Jump");
     if (active) {
       ImGui::Indent(16.0f);
-      ImGui::TextColored(colActive, "Spamming @ %dms",
-                         Config::TurboJumpDelayMs.load(std::memory_order_relaxed));
+      ImGui::TextColored(
+          colActive, "Spamming @ %dms",
+          Config::TurboJumpDelayMs.load(std::memory_order_relaxed));
       ImGui::Unindent(16.0f);
     }
   }
 
   // Superglide
   {
-    const bool enabled = Config::EnableSuperglide.load(std::memory_order_relaxed);
+    const bool enabled =
+        Config::EnableSuperglide.load(std::memory_order_relaxed);
     StatusDot(enabled);
     ImGui::SameLine();
     ImGui::TextColored(enabled ? colLabel : colOff, "Superglide");
@@ -818,10 +812,9 @@ void GuiManager::RenderStateContent() {
     Tooltip("Trigger a superglide to see timing accuracy and success rate "
             "statistics here.");
   } else {
-    const int historyLen =
-        (totalCount < Globals::kSuperglideHistorySize)
-            ? totalCount
-            : Globals::kSuperglideHistorySize;
+    const int historyLen = (totalCount < Globals::kSuperglideHistorySize)
+                               ? totalCount
+                               : Globals::kSuperglideHistorySize;
 
     double sumChance = 0.0;
     double lastChance = 0.0;
@@ -858,26 +851,24 @@ void GuiManager::RenderStateContent() {
 
     ImGui::Text("Last:");
     ImGui::SameLine();
-    const ImVec4 chanceCol =
-        (lastChance >= 90.0) ? colOn
-        : (lastChance >= 50.0)
-            ? ImVec4(0.95f, 0.85f, 0.20f, 1.0f)
-            : ImVec4(0.95f, 0.40f, 0.30f, 1.0f);
+    const ImVec4 chanceCol = (lastChance >= 90.0) ? colOn
+                             : (lastChance >= 50.0)
+                                 ? ImVec4(0.95f, 0.85f, 0.20f, 1.0f)
+                                 : ImVec4(0.95f, 0.40f, 0.30f, 1.0f);
     ImGui::TextColored(chanceCol, "%.1f%% chance", lastChance);
     ImGui::SameLine();
-    ImGui::TextColored(colLabel, "(%.3f frames, %+.2fms error)",
-                       lastFrames, lastErrorMs);
+    ImGui::TextColored(colLabel, "(%.3f frames, %+.2fms error)", lastFrames,
+                       lastErrorMs);
     Tooltip("Success probability of the most recent superglide execution. "
             "Based on the Apex Superglide Practice Tool formula: "
             "1 frame = 100%%, 0 or 2 frames = 0%%.");
 
     ImGui::Text("Average (last %d):", historyLen);
     ImGui::SameLine();
-    const ImVec4 avgCol =
-        (avgChance >= 90.0) ? colOn
-        : (avgChance >= 50.0)
-            ? ImVec4(0.95f, 0.85f, 0.20f, 1.0f)
-            : ImVec4(0.95f, 0.40f, 0.30f, 1.0f);
+    const ImVec4 avgCol = (avgChance >= 90.0) ? colOn
+                          : (avgChance >= 50.0)
+                              ? ImVec4(0.95f, 0.85f, 0.20f, 1.0f)
+                              : ImVec4(0.95f, 0.40f, 0.30f, 1.0f);
     ImGui::TextColored(avgCol, "%.1f%%", avgChance);
 
     ImGui::Text("Error Range:");
@@ -891,8 +882,7 @@ void GuiManager::RenderStateContent() {
     ImGui::TextDisabled("Success History");
     ImGui::PushStyleColor(ImGuiCol_PlotHistogram,
                           ImVec4(0.35f, 0.75f, 0.35f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBg,
-                          ImVec4(0.12f, 0.14f, 0.20f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.12f, 0.14f, 0.20f, 1.0f));
     ImGui::PlotHistogram("##SGHistory", chancePlot, historyLen, 0, nullptr,
                          0.0f, 100.0f, ImVec2(-FLT_MIN, 50));
     ImGui::PopStyleColor(2);

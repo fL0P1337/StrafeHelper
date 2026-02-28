@@ -1,10 +1,12 @@
 // KeybindManager.cpp
 #include "KeybindManager.h"
 #include "Config.h"
+#include "Globals.h"
+#include "Logger.h"
 #include <map>
 #include <mutex>
+#include <string>
 #include <windows.h>
-#include "Globals.h"
 
 namespace KeybindManager {
 
@@ -170,6 +172,43 @@ bool IsTurboJumpActive() {
 
 bool IsSuperglideActive() {
   return false; // One-shot trigger, no persistent active state.
+}
+
+bool HandleBind(int vkCode, bool isKeyDown) {
+  std::atomic<int> *target = Globals::g_bindingTarget.load();
+  if (!target) {
+    return false;
+  }
+
+  // Suppress key-up events for the binding key to prevent leaks,
+  // but don't perform binding logic on them.
+  if (!isKeyDown) {
+    return true;
+  }
+
+  // Cancel on Escape
+  if (vkCode == VK_ESCAPE) {
+    Globals::g_bindingTarget.store(nullptr);
+    Logger::GetInstance().Log("Binding cancelled by user.");
+    return true;
+  }
+
+  // Ignore mouse buttons if they somehow get here (hooks usually filter them, but
+  // good to be safe)
+  if (vkCode == VK_LBUTTON || vkCode == VK_RBUTTON || vkCode == VK_MBUTTON) {
+    return true;
+  }
+
+  // Bind the key
+  target->store(vkCode);
+  Config::SaveConfig();
+
+  Logger::GetInstance().Log("Rebound key to VK " + std::to_string(vkCode));
+
+  // Exit binding mode
+  Globals::g_bindingTarget.store(nullptr);
+
+  return true; // Suppress the key press so it doesn't trigger game actions
 }
 
 } // namespace KeybindManager

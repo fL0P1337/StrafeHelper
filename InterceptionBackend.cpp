@@ -58,6 +58,11 @@ bool InterceptionBackend::Initialize() noexcept {
       context_, interceptionIsKeyboard_,
       static_cast<InterceptionFilter>(INTERCEPTION_FILTER_KEY_ALL));
 
+  // Explicitly set mouse filter to none to ensure no mouse events are intercepted.
+  interceptionSetFilter_(
+      context_, interceptionIsMouse_,
+      static_cast<InterceptionFilter>(INTERCEPTION_FILTER_MOUSE_NONE));
+
   if (!EnumerateKeyboards()) {
     LogError("[InterceptionBackend] failed to enumerate keyboard devices.");
     Shutdown();
@@ -253,7 +258,8 @@ bool InterceptionBackend::ResolveApi() noexcept {
          resolve(interceptionReceive_, "interception_receive") &&
          resolve(interceptionGetHardwareId_, "interception_get_hardware_id") &&
          resolve(interceptionIsInvalid_, "interception_is_invalid") &&
-         resolve(interceptionIsKeyboard_, "interception_is_keyboard");
+         resolve(interceptionIsKeyboard_, "interception_is_keyboard") &&
+         resolve(interceptionIsMouse_, "interception_is_mouse");
 }
 
 bool InterceptionBackend::EnumerateKeyboards() noexcept {
@@ -368,9 +374,18 @@ void InterceptionBackend::DrainNonKeyboardDevice(
     return;
   }
 
-  std::array<InterceptionStroke, 8> discard{};
-  while (interceptionReceive_(context_, device, discard.data(),
-                              static_cast<unsigned int>(discard.size())) > 0) {
+  // If we somehow receive mouse events, pass them through immediately
+  // instead of discarding them. This prevents mouse freezes/lag if
+  // the filter logic fails or driver behavior is unexpected.
+  std::array<InterceptionStroke, 8> strokes{};
+  while (true) {
+    const int received = interceptionReceive_(
+        context_, device, strokes.data(),
+        static_cast<unsigned int>(strokes.size()));
+    if (received <= 0) {
+      break;
+    }
+    interceptionSend_(context_, device, strokes.data(), received);
   }
 }
 

@@ -42,6 +42,10 @@ CRITICAL_SECTION g_csActiveKeys; // Initialized in InitializeApplication
 std::atomic<bool> g_isCSpamActive{false};
 
 SuperglideStats g_superglideStats{};
+
+// --- Binding State ---
+std::atomic<std::atomic<int>*> g_bindingTarget{nullptr};
+
 } // namespace Globals
 // --- End Global Variable Definitions ---
 
@@ -53,7 +57,8 @@ std::unique_ptr<InputBackend> g_interceptionBackend;
 std::thread g_interceptionThread;
 std::atomic<bool> g_interceptionRunning{false};
 std::mutex g_backendMutex; // guards start/stop of interception thread
-HHOOK g_hSideMouseHook = NULL;
+std::thread g_sideMouseThread;
+std::atomic<bool> g_sideMouseRunning{false};
 
 // -----------------------------------------------------------------------
 // Shared keybind dispatch logic used by both interception keyboard events
@@ -158,72 +163,61 @@ bool DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept {
   }
 
   const bool isKeyDown = (evt.flags & NEO_KEY_BREAK) == 0u;
+
+  // Handle dynamic keybinding capture
+  if (KeybindManager::HandleBind(static_cast<int>(vkCode), isKeyDown)) {
+    return true; // Suppress
+  }
+
   return HandleFeatureKeyEvent(static_cast<int>(vkCode), isKeyDown);
 }
 
-LRESULT CALLBACK SideMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
-  if (nCode != HC_ACTION) {
-    return CallNextHookEx(g_hSideMouseHook, nCode, wParam, lParam);
-  }
+// -----------------------------------------------------------------------
+// Side-mouse polling thread (XBUTTON1/2) using GetAsyncKeyState
+// This avoids using WH_MOUSE_LL hooks which cause cursor lag on 8000Hz mice.
+// -----------------------------------------------------------------------
+void SideMouseThreadFunc() noexcept {
+  bool lastX1 = false;
+  bool lastX2 = false;
 
-  if (wParam != WM_XBUTTONDOWN && wParam != WM_XBUTTONUP &&
-      wParam != WM_XBUTTONDBLCLK) {
-    return CallNextHookEx(g_hSideMouseHook, nCode, wParam, lParam);
-  }
+  while (g_sideMouseRunning.load(std::memory_order_relaxed)) {
+    // Check hardware state directly (MSB set = down)
+    // 0x8000 is the high-order bit for "currently down"
+    const bool x1 = (GetAsyncKeyState(VK_XBUTTON1) & 0x8000) != 0;
+    const bool x2 = (GetAsyncKeyState(VK_XBUTTON2) & 0x8000) != 0;
 
-  const auto *mouse = reinterpret_cast<const MSLLHOOKSTRUCT *>(lParam);
-  if (!mouse) {
-    return CallNextHookEx(g_hSideMouseHook, nCode, wParam, lParam);
-  }
+    if (x1 != lastX1) {
+      if (!KeybindManager::HandleBind(VK_XBUTTON1, x1)) {
+        HandleFeatureKeyEvent(VK_XBUTTON1, x1);
+      }
+      lastX1 = x1;
+    }
 
-  if ((mouse->flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED)) != 0u) {
-    return CallNextHookEx(g_hSideMouseHook, nCode, wParam, lParam);
-  }
+    if (x2 != lastX2) {
+      if (!KeybindManager::HandleBind(VK_XBUTTON2, x2)) {
+        HandleFeatureKeyEvent(VK_XBUTTON2, x2);
+      }
+      lastX2 = x2;
+    }
 
-  const DWORD xButton = HIWORD(mouse->mouseData);
-  const int vkCode =
-      (xButton == XBUTTON1)
-          ? VK_XBUTTON1
-          : ((xButton == XBUTTON2) ? VK_XBUTTON2 : 0);
-  if (vkCode == 0) {
-    return CallNextHookEx(g_hSideMouseHook, nCode, wParam, lParam);
+    // Sleep briefly to yield CPU. 1-2ms is fine for human reaction time
+    // and negligible CPU usage, while keeping cursor path 100% free.
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
-
-  const bool isKeyDown =
-      (wParam == WM_XBUTTONDOWN || wParam == WM_XBUTTONDBLCLK);
-  const bool shouldSuppress = HandleFeatureKeyEvent(vkCode, isKeyDown);
-  if (shouldSuppress) {
-    return 1;
-  }
-
-  return CallNextHookEx(g_hSideMouseHook, nCode, wParam, lParam);
 }
 
-bool SetupSideMouseHook() {
-  if (g_hSideMouseHook) {
-    return true;
-  }
-
-  g_hSideMouseHook =
-      SetWindowsHookExW(WH_MOUSE_LL, SideMouseProc, Globals::g_hInstance, 0);
-  if (!g_hSideMouseHook) {
-    LogError("SetWindowsHookEx for side-mouse hook failed");
-    return false;
-  }
-
-  std::cout << "Side mouse hook installed." << std::endl;
-  return true;
+void StartSideMouseThread() {
+  if (g_sideMouseRunning.load()) return;
+  g_sideMouseRunning.store(true);
+  g_sideMouseThread = std::thread(SideMouseThreadFunc);
+  std::cout << "Side mouse polling thread started." << std::endl;
 }
 
-void TeardownSideMouseHook() {
-  if (!g_hSideMouseHook) {
-    return;
+void StopSideMouseThread() {
+  g_sideMouseRunning.store(false);
+  if (g_sideMouseThread.joinable()) {
+    g_sideMouseThread.join();
   }
-
-  if (!UnhookWindowsHookEx(g_hSideMouseHook)) {
-    LogError("UnhookWindowsHookEx for side-mouse hook failed");
-  }
-  g_hSideMouseHook = NULL;
 }
 
 // -----------------------------------------------------------------------
@@ -414,21 +408,7 @@ bool InitializeApplication(HINSTANCE hInstance) {
   }
   std::cout << "Key states initialized." << std::endl;
 
-  if (!SetupSideMouseHook()) {
-    if (Globals::g_hWindow)
-      DestroyWindow(Globals::g_hWindow);
-    UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
-    CloseHandle(Globals::g_hSpamEvent);
-    CloseHandle(Globals::g_hTurboLootEvent);
-    CloseHandle(Globals::g_hTurboJumpEvent);
-    CloseHandle(Globals::g_hSuperglideEvent);
-    DeleteCriticalSection(&Globals::g_csActiveKeys);
-    Globals::g_hSpamEvent = NULL;
-    Globals::g_hTurboLootEvent = NULL;
-    Globals::g_hTurboJumpEvent = NULL;
-    Globals::g_hSuperglideEvent = NULL;
-    return false;
-  }
+  StartSideMouseThread();
 
   // --- Start the selected input backend ---
   const auto backendKind =
@@ -460,7 +440,7 @@ bool InitializeApplication(HINSTANCE hInstance) {
         CreateThread(NULL, 0, HookThreadFunc, NULL, 0, NULL);
     if (!Globals::g_hHookThread) {
     hook_thread_failed:
-      TeardownSideMouseHook();
+      StopSideMouseThread();
       if (Globals::g_hWindow)
         DestroyWindow(Globals::g_hWindow);
       UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
@@ -486,7 +466,8 @@ bool InitializeApplication(HINSTANCE hInstance) {
       StopHookThread();
     }
 
-    TeardownSideMouseHook();
+    StopSideMouseThread();
+
     if (Globals::g_hWindow)
       DestroyWindow(Globals::g_hWindow);
     UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
@@ -513,7 +494,7 @@ bool InitializeApplication(HINSTANCE hInstance) {
 void CleanupApplication() {
   std::cout << "--- Starting Application Cleanup ---" << std::endl;
 
-  TeardownSideMouseHook();
+  StopSideMouseThread();
   StopSpamThread();
   StopTurboLootThread();
   StopTurboJumpThread();
