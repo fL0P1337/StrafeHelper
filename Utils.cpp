@@ -1,7 +1,21 @@
 // Utils.cpp
 #include "Utils.h"
+#include "Config.h"
 #include <iostream>
+#include <random>
 #include <windows.h> // For FormatMessage, LocalFree
+
+DWORD ApplyJitter(DWORD baseDelay) {
+  if (!Config::EnableJitter.load(std::memory_order_relaxed))
+    return baseDelay;
+  const int jitter = Config::JitterMs.load(std::memory_order_relaxed);
+  if (jitter <= 0)
+    return baseDelay;
+  thread_local std::mt19937 rng(std::random_device{}());
+  std::uniform_int_distribution<int> dist(-jitter, jitter);
+  const int adjusted = static_cast<int>(baseDelay) + dist(rng);
+  return static_cast<DWORD>(adjusted < 1 ? 1 : adjusted);
+}
 
 void LogError(const std::string& message, DWORD errorCode) {
     std::cerr << "ERROR: " << message;

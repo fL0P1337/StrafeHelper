@@ -11,47 +11,32 @@
 
 namespace {
 
-DWORD ApplyJitter(DWORD baseDelay) {
-  if (!Config::EnableJitter.load(std::memory_order_relaxed))
-    return baseDelay;
-  const int jitter = Config::JitterMs.load(std::memory_order_relaxed);
-  if (jitter <= 0)
-    return baseDelay;
-  thread_local std::mt19937 rng(std::random_device{}());
-  std::uniform_int_distribution<int> dist(-jitter, jitter);
-  const int adjusted = static_cast<int>(baseDelay) + dist(rng);
-  return static_cast<DWORD>(adjusted < 1 ? 1 : adjusted);
-}
-
-// ---- Turbo Loot ----
-std::atomic<bool> g_stopTurboLootRequest{false};
-
-DWORD WINAPI TurboLootThread(LPVOID) {
-  while (!g_stopTurboLootRequest.load(std::memory_order_relaxed)) {
+void RunTurboLoop(std::atomic<bool> &stopRequest, HANDLE eventHandle,
+                  std::atomic<bool> &configEnable,
+                  std::atomic<int> &configKey, std::atomic<int> &configDelay,
+                  std::atomic<int> &configDuration, bool (*isActiveFunc)(),
+                  const char *threadName) {
+  while (!stopRequest.load(std::memory_order_relaxed)) {
     DWORD timeout = INFINITE;
 
-    const bool enabled =
-        Config::EnableTurboLoot.load(std::memory_order_relaxed);
-    const int vk = Config::TurboLootKey.load(std::memory_order_relaxed);
-
-    if (enabled) {
-      if (KeybindManager::IsTurboLootActive()) {
-        timeout = ApplyJitter(Config::TurboLootDelayMs.load(std::memory_order_relaxed));
+    if (configEnable.load(std::memory_order_relaxed)) {
+      if (isActiveFunc()) {
+        timeout = ApplyJitter(configDelay.load(std::memory_order_relaxed));
       }
     }
 
-    WaitForSingleObject(Globals::g_hTurboLootEvent, timeout);
+    WaitForSingleObject(eventHandle, timeout);
 
-    if (g_stopTurboLootRequest.load(std::memory_order_relaxed))
+    if (stopRequest.load(std::memory_order_relaxed))
       break;
 
-    if (!Config::EnableTurboLoot.load(std::memory_order_relaxed))
+    if (!configEnable.load(std::memory_order_relaxed))
       continue;
 
-    if (!KeybindManager::IsTurboLootActive())
+    if (!isActiveFunc())
       continue;
 
-    const int key = Config::TurboLootKey.load(std::memory_order_relaxed);
+    const int key = configKey.load(std::memory_order_relaxed);
 
     INPUT input = {INPUT_KEYBOARD};
     input.ki.wVk = key;
@@ -61,10 +46,10 @@ DWORD WINAPI TurboLootThread(LPVOID) {
     SendInput(1, &input, sizeof(INPUT));
 
     DWORD duration =
-        ApplyJitter(Config::TurboLootDurationMs.load(std::memory_order_relaxed));
+        ApplyJitter(configDuration.load(std::memory_order_relaxed));
     if (duration > 0) {
       Sleep(duration);
-      if (g_stopTurboLootRequest.load(std::memory_order_relaxed))
+      if (stopRequest.load(std::memory_order_relaxed))
         break;
     }
 
@@ -73,7 +58,17 @@ DWORD WINAPI TurboLootThread(LPVOID) {
     SendInput(1, &input, sizeof(INPUT));
   }
 
-  std::cout << "TurboLoot thread exiting." << std::endl;
+  std::cout << threadName << " thread exiting." << std::endl;
+}
+
+// ---- Turbo Loot ----
+std::atomic<bool> g_stopTurboLootRequest{false};
+
+DWORD WINAPI TurboLootThread(LPVOID) {
+  RunTurboLoop(g_stopTurboLootRequest, Globals::g_hTurboLootEvent,
+               Config::EnableTurboLoot, Config::TurboLootKey,
+               Config::TurboLootDelayMs, Config::TurboLootDurationMs,
+               KeybindManager::IsTurboLootActive, "TurboLoot");
   return 0;
 }
 
@@ -81,53 +76,10 @@ DWORD WINAPI TurboLootThread(LPVOID) {
 std::atomic<bool> g_stopTurboJumpRequest{false};
 
 DWORD WINAPI TurboJumpThread(LPVOID) {
-  while (!g_stopTurboJumpRequest.load(std::memory_order_relaxed)) {
-    DWORD timeout = INFINITE;
-
-    const bool enabled =
-        Config::EnableTurboJump.load(std::memory_order_relaxed);
-    const int vk = Config::TurboJumpKey.load(std::memory_order_relaxed);
-
-    if (enabled) {
-      if (KeybindManager::IsTurboJumpActive()) {
-        timeout = ApplyJitter(Config::TurboJumpDelayMs.load(std::memory_order_relaxed));
-      }
-    }
-
-    WaitForSingleObject(Globals::g_hTurboJumpEvent, timeout);
-
-    if (g_stopTurboJumpRequest.load(std::memory_order_relaxed))
-      break;
-
-    if (!Config::EnableTurboJump.load(std::memory_order_relaxed))
-      continue;
-
-    if (!KeybindManager::IsTurboJumpActive())
-      continue;
-
-    const int key = Config::TurboJumpKey.load(std::memory_order_relaxed);
-
-    INPUT input = {INPUT_KEYBOARD};
-    input.ki.wVk = key;
-    input.ki.wScan = MapVirtualKey(key, MAPVK_VK_TO_VSC);
-    input.ki.dwFlags = KEYEVENTF_SCANCODE;
-    input.ki.dwExtraInfo = GetMessageExtraInfo();
-    SendInput(1, &input, sizeof(INPUT));
-
-    DWORD duration =
-        ApplyJitter(Config::TurboJumpDurationMs.load(std::memory_order_relaxed));
-    if (duration > 0) {
-      Sleep(duration);
-      if (g_stopTurboJumpRequest.load(std::memory_order_relaxed))
-        break;
-    }
-
-    // Send key-up
-    input.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
-    SendInput(1, &input, sizeof(INPUT));
-  }
-
-  std::cout << "TurboJump thread exiting." << std::endl;
+  RunTurboLoop(g_stopTurboJumpRequest, Globals::g_hTurboJumpEvent,
+               Config::EnableTurboJump, Config::TurboJumpKey,
+               Config::TurboJumpDelayMs, Config::TurboJumpDurationMs,
+               KeybindManager::IsTurboJumpActive, "TurboJump");
   return 0;
 }
 
