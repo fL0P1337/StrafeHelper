@@ -1,6 +1,7 @@
 // Utils.cpp
 #include "Utils.h"
 #include "Config.h"
+#include <array>
 #include <iostream>
 #include <random>
 #include <windows.h> // For FormatMessage, LocalFree
@@ -15,6 +16,82 @@ DWORD ApplyJitter(DWORD baseDelay) {
   std::uniform_int_distribution<int> dist(-jitter, jitter);
   const int adjusted = static_cast<int>(baseDelay) + dist(rng);
   return static_cast<DWORD>(adjusted < 1 ? 1 : adjusted);
+}
+
+WORD VirtualKeyToScanCode(int vk) {
+  UINT scanCode =
+      MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC_EX);
+  if (scanCode == 0) {
+    scanCode = MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC);
+  }
+  return static_cast<WORD>(scanCode & 0xFFu);
+}
+
+DWORD VirtualKeyInputFlags(int vk, bool keyDown) {
+  const UINT scanCode =
+      MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC_EX);
+  DWORD flags = KEYEVENTF_SCANCODE;
+  if ((scanCode & 0xFF00u) == 0xE000u) {
+    flags |= KEYEVENTF_EXTENDEDKEY;
+  }
+  if (!keyDown) {
+    flags |= KEYEVENTF_KEYUP;
+  }
+  return flags;
+}
+
+std::string FormatVirtualKeyName(int vk) {
+  struct KeyName {
+    int vk;
+    const char *name;
+  };
+  static constexpr std::array<KeyName, 18> kNames{{
+      {VK_LCONTROL, "Left Ctrl"},
+      {VK_RCONTROL, "Right Ctrl"},
+      {VK_CONTROL, "Ctrl"},
+      {VK_LSHIFT, "Left Shift"},
+      {VK_RSHIFT, "Right Shift"},
+      {VK_SHIFT, "Shift"},
+      {VK_LMENU, "Left Alt"},
+      {VK_RMENU, "Right Alt"},
+      {VK_MENU, "Alt"},
+      {VK_SPACE, "Space"},
+      {VK_TAB, "Tab"},
+      {VK_ESCAPE, "Escape"},
+      {VK_RETURN, "Enter"},
+      {VK_BACK, "Backspace"},
+      {VK_LBUTTON, "Mouse Left"},
+      {VK_RBUTTON, "Mouse Right"},
+      {VK_MBUTTON, "Mouse Middle"},
+      {VK_XBUTTON1, "Mouse X1"},
+  }};
+
+  if (vk == VK_XBUTTON2) {
+    return "Mouse X2";
+  }
+  if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) {
+    return std::string(1, static_cast<char>(vk));
+  }
+  for (const auto &entry : kNames) {
+    if (entry.vk == vk) {
+      return entry.name;
+    }
+  }
+
+  const UINT scanCode =
+      MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC_EX);
+  if (scanCode != 0) {
+    char name[64]{};
+    LONG lParam = static_cast<LONG>((scanCode & 0xFFu) << 16);
+    if ((scanCode & 0xFF00u) == 0xE000u) {
+      lParam |= (1L << 24);
+    }
+    if (GetKeyNameTextA(lParam, name, static_cast<int>(sizeof(name))) > 0) {
+      return name;
+    }
+  }
+
+  return "VK " + std::to_string(vk);
 }
 
 void LogError(const std::string& message, DWORD errorCode) {

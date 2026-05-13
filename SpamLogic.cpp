@@ -152,9 +152,9 @@ void SendKeyInputBatch(const std::vector<int> &keys, bool keyDown) {
   std::vector<INPUT> inputs(keys.size());
   for (size_t i = 0; i < keys.size(); ++i) {
     inputs[i].type = INPUT_KEYBOARD;
-    inputs[i].ki.wVk = keys[i];
-    inputs[i].ki.wScan = MapVirtualKey(keys[i], MAPVK_VK_TO_VSC);
-    inputs[i].ki.dwFlags = KEYEVENTF_SCANCODE | (keyDown ? 0 : KEYEVENTF_KEYUP);
+    inputs[i].ki.wVk = 0;
+    inputs[i].ki.wScan = VirtualKeyToScanCode(keys[i]);
+    inputs[i].ki.dwFlags = VirtualKeyInputFlags(keys[i], keyDown);
     inputs[i].ki.time = 0;
     inputs[i].ki.dwExtraInfo = GetMessageExtraInfo();
   }
