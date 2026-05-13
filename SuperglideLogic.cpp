@@ -14,7 +14,10 @@
 #include "Globals.h"
 #include "Utils.h"
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <iostream>
+#include <mutex>
 #include <timeapi.h> // timeBeginPeriod / timeEndPeriod
 #include <windows.h>
 
@@ -27,6 +30,8 @@ constexpr int kJumpVK = VK_SPACE;      // Jump
 constexpr int kCrouchVK = VK_LCONTROL; // Crouch (left Ctrl)
 
 std::atomic<bool> g_stopSuperglideRequest{false};
+std::mutex g_superglideCvMtx;
+std::condition_variable g_superglideCv;
 
 // Injects a single key tap (down then up) using KEYEVENTF_SCANCODE.
 // Matches the injection style used throughout the rest of the codebase.
@@ -129,7 +134,12 @@ DWORD WINAPI SuperglideThread(LPVOID) {
       stats.count.fetch_add(1, std::memory_order_relaxed);
     }
 
-    Sleep(500);
+    {
+      std::unique_lock<std::mutex> lock(g_superglideCvMtx);
+      g_superglideCv.wait_for(lock, std::chrono::milliseconds(500), [] {
+        return g_stopSuperglideRequest.load(std::memory_order_relaxed);
+      });
+    }
   }
 
   timeEndPeriod(1);
@@ -157,6 +167,8 @@ void StopSuperglideThread() {
   if (Globals::g_hSuperglideThread) {
     std::cout << "Requesting Superglide thread stop..." << std::endl;
     g_stopSuperglideRequest.store(true);
+    g_superglideCv.notify_all();
+
     if (Globals::g_hSuperglideEvent)
       SetEvent(Globals::g_hSuperglideEvent);
     WaitForSingleObject(Globals::g_hSuperglideThread, 1000);
