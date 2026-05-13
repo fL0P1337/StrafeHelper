@@ -253,54 +253,23 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
   if (isTrigger && spamFeatureEnabled) {
     // Use KeybindManager to process hold/toggle mode
     bool shouldBeActive = KeybindManager::ProcessSpamTrigger(vkCode, isKeyDown);
-    
-    if (shouldBeActive && !Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
+
+    if (shouldBeActive &&
+        !Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
       Globals::g_isCSpamActive.store(true, std::memory_order_relaxed);
       std::cout << "Spam Activated" << std::endl;
-
-      // Ensure any held movement keys are virtually UP while spamming.
-      ApplySnapTapOutput(true);
-      SendKeyUpForPhysicallyHeldWasd();
-
-      PublishSpamKeysFromState(snapTapEnabled);
-    } else if (!shouldBeActive && Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
+      OnSpamActivated(snapTapEnabled);
+    } else if (!shouldBeActive &&
+               Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
       std::cout << "Spam Deactivated" << std::endl;
-
-      if (snapTapEnabled) {
-        CleanupSpamState(false);
-        ApplySnapTapOutput(false);
-      } else {
-        CleanupSpamState(true);
-      }
+      OnSpamDeactivated(snapTapEnabled);
     }
     return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam);
   }
 
-  if (isWASD) {
-    AxisState *axis = AxisForVk(vkCode);
-    if (axis) {
-      if (isKeyDown) {
-        AxisOnKeyDown(*axis, vkCode);
-      } else if (isKeyUp) {
-        AxisOnKeyUp(*axis, vkCode);
-      }
-    }
-
-    if (spamActive) {
-      // Spam layer keeps movement keys virtually UP and spams the active
-      // key(s).
-      ApplySnapTapOutput(true);
-      SendKeyUpImmediate(vkCode);
-      PublishSpamKeysFromState(snapTapEnabled);
-      return 1; // swallow physical WASD while spamming
-    }
-
-    if (snapTapEnabled) {
-      // SnapTap is always-on (even without trigger). It owns WASD output when
-      // enabled.
-      ApplySnapTapOutput(false);
-      return 1; // swallow physical WASD and emit sanitized output via SendInput
-    }
+  if (HandleMovementKeyState(vkCode, isKeyDown, isKeyUp, spamActive,
+                             snapTapEnabled)) {
+    return 1;
   }
 
   // --- Turbo key detection ---
@@ -326,12 +295,62 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
   if (vkCode == superglideBindVK &&
       Config::EnableSuperglide.load(std::memory_order_relaxed)) {
     // Use KeybindManager for hold/toggle mode (triggers on key-down edge)
-    if (KeybindManager::ProcessSuperglide(vkCode, isKeyDown) && Globals::g_hSuperglideEvent)
+    if (KeybindManager::ProcessSuperglide(vkCode, isKeyDown) &&
+        Globals::g_hSuperglideEvent)
       SetEvent(Globals::g_hSuperglideEvent);
     return 1; // suppress — do not pass to game
   }
 
   return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam); // Globals::
+}
+
+void OnSpamActivated(bool snapTapEnabled) {
+  // Ensure any held movement keys are virtually UP while spamming.
+  ApplySnapTapOutput(true);
+  SendKeyUpForPhysicallyHeldWasd();
+  PublishSpamKeysFromState(snapTapEnabled);
+}
+
+void OnSpamDeactivated(bool snapTapEnabled) {
+  if (snapTapEnabled) {
+    CleanupSpamState(false);
+    ApplySnapTapOutput(false);
+  } else {
+    CleanupSpamState(true);
+  }
+}
+
+bool HandleMovementKeyState(int vkCode, bool isKeyDown, bool isKeyUp,
+                            bool spamActive, bool snapTapEnabled) {
+  if (!IsWasdVk(vkCode)) {
+    return false;
+  }
+
+  AxisState *axis = AxisForVk(vkCode);
+  if (axis) {
+    if (isKeyDown) {
+      AxisOnKeyDown(*axis, vkCode);
+    } else if (isKeyUp) {
+      AxisOnKeyUp(*axis, vkCode);
+    }
+  }
+
+  if (spamActive) {
+    // Spam layer keeps movement keys virtually UP and spams the active key(s).
+    ApplySnapTapOutput(true);
+    SendKeyUpImmediate(vkCode);
+    PublishSpamKeysFromState(snapTapEnabled);
+    return true;
+  }
+
+  if (snapTapEnabled) {
+    // SnapTap is always-on (even without trigger). It owns WASD output when
+    // enabled.
+    ApplySnapTapOutput(false);
+    return true;
+  }
+
+  return false;
 }
 
 void OnSnapTapToggled(bool enabled) {

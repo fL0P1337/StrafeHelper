@@ -88,14 +88,11 @@ bool HandleFeatureKeyEvent(int vkCode, bool isKeyDown) noexcept {
         !Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
       Globals::g_isCSpamActive.store(true, std::memory_order_relaxed);
       std::cout << "Spam Activated" << std::endl;
-      // let SpamLogic handle it via existing event mechanism
-      if (Globals::g_hSpamEvent) {
-        SetEvent(Globals::g_hSpamEvent);
-      }
+      OnSpamActivated(snapTapEnabled);
     } else if (!shouldBeActive &&
                Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
       std::cout << "Spam Deactivated" << std::endl;
-      CleanupSpamState(snapTapEnabled ? false : true);
+      OnSpamDeactivated(snapTapEnabled);
     }
     return false;
   }
@@ -132,17 +129,14 @@ bool HandleFeatureKeyEvent(int vkCode, bool isKeyDown) noexcept {
     return true;
   }
 
-  // Wake spam thread when movement keys change while spam is active.
   const bool spamActive =
       Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
       spamFeatureEnabled;
-  const bool isWASD =
-      (vkCode == 'W' || vkCode == 'A' || vkCode == 'S' || vkCode == 'D');
-  if (isWASD && spamActive) {
-    if (Globals::g_hSpamEvent) {
-      SetEvent(Globals::g_hSpamEvent);
-    }
+  if (HandleMovementKeyState(vkCode, isKeyDown, !isKeyDown, spamActive,
+                             snapTapEnabled)) {
+    return true;
   }
+
   return false;
 }
 
