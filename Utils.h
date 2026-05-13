@@ -4,6 +4,7 @@
 #include <string>
 #include <windows.h> // For DWORD
 
+DWORD ApplyJitter(DWORD baseDelay);
 void LogError(const std::string& message, DWORD errorCode = 0);
 
 /**
