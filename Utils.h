@@ -6,4 +6,8 @@
 
 void LogError(const std::string& message, DWORD errorCode = 0);
 
-// You could add other general utilities here if needed
+/**
+ * Returns the absolute path to the directory containing the current executable,
+ * including a trailing backslash.
+ */
+std::wstring GetExecutableDirectory();

@@ -33,3 +33,18 @@ void LogError(const std::string& message, DWORD errorCode) {
     // MessageBoxA(NULL, fullMsg.c_str(), "StrafeHelper Error", MB_OK | MB_ICONERROR);
 #endif
 }
+
+std::wstring GetExecutableDirectory() {
+    wchar_t buffer[MAX_PATH];
+    DWORD length = GetModuleFileNameW(NULL, buffer, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) {
+        return L"";
+    }
+
+    std::wstring path(buffer, length);
+    size_t pos = path.find_last_of(L"\\/");
+    if (pos != std::wstring::npos) {
+        return path.substr(0, pos + 1);
+    }
+    return L"";
+}

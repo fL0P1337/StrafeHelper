@@ -1,5 +1,6 @@
 // gui/GuiManager.cpp
 #include "GuiManager.h"
+#include "../Utils.h"
 #include "../Application.h"
 #include "../Config.h"
 #include "../Globals.h"
@@ -485,20 +486,11 @@ void GuiManager::RenderConfigContent() {
       s_icStatus.lastCheckTick = now;
 
       // 1. Is interception.dll present next to the exe?
-      wchar_t exePath[MAX_PATH] = {};
-      GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-      for (int k = static_cast<int>(wcslen(exePath)); k >= 0; --k) {
-        if (exePath[k] == L'\\' || exePath[k] == L'/') {
-          exePath[k + 1] = L'\0';
-          break;
-        }
-      }
-      wchar_t dllPath[MAX_PATH] = {};
-      wcscpy_s(dllPath, exePath);
-      wcscat_s(dllPath, L"interception.dll");
+      std::wstring exeDir = GetExecutableDirectory();
+      std::wstring dllPath = exeDir + L"interception.dll";
 
       const bool dllPresent =
-          (GetFileAttributesW(dllPath) != INVALID_FILE_ATTRIBUTES);
+          (GetFileAttributesW(dllPath.c_str()) != INVALID_FILE_ATTRIBUTES);
 
       if (!dllPresent) {
         s_icStatus.state = InterceptionStatus::State::DllMissing;
@@ -507,7 +499,7 @@ void GuiManager::RenderConfigContent() {
         //    active. We LoadLibrary temporarily; drivers loaded in both the
         //    target app and here share the same user-mode proxy so this is
         //    safe.
-        HMODULE lib = LoadLibraryW(dllPath);
+        HMODULE lib = LoadLibraryW(dllPath.c_str());
         if (!lib) {
           s_icStatus.state = InterceptionStatus::State::DriverInactive;
         } else {

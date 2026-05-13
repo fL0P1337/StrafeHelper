@@ -223,8 +223,14 @@ bool InterceptionBackend::GetStatus(BackendStatus &out) noexcept {
 }
 
 bool InterceptionBackend::ResolveApi() noexcept {
-  auto tryLoad = [this](const wchar_t *dllName) -> bool {
-    interceptionLib_ = LoadLibraryW(dllName);
+  std::wstring exeDir = GetExecutableDirectory();
+  if (exeDir.empty()) {
+    return false;
+  }
+
+  auto tryLoad = [this, &exeDir](const wchar_t *dllName) -> bool {
+    std::wstring fullPath = exeDir + dllName;
+    interceptionLib_ = LoadLibraryW(fullPath.c_str());
     if (!interceptionLib_) {
       return false;
     }
