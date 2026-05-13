@@ -243,14 +243,9 @@ void GuiManager::RenderConfigContent() {
     ImGui::PopStyleVar();                                                      \
   } while (false)
 
-  // Helper: resolve VK code to a readable key name
   auto VkToName = [](int vk, char *buf, int bufSize) {
-    UINT sc = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
-    if (sc != 0) {
-      GetKeyNameTextA((sc << 16), buf, bufSize);
-    } else {
-      sprintf_s(buf, bufSize, "VK %d", vk);
-    }
+    const std::string name = FormatVirtualKeyName(vk);
+    snprintf(buf, static_cast<size_t>(bufSize), "%s", name.c_str());
   };
 
   // Returns the label of another feature using the same VK, or nullptr.
@@ -485,12 +480,14 @@ void GuiManager::RenderConfigContent() {
     if ((now - s_icStatus.lastCheckTick) > 1000u) {
       s_icStatus.lastCheckTick = now;
 
-      // 1. Is interception.dll present next to the exe?
+      // 1. Is an Interception DLL present next to the exe?
       std::wstring exeDir = GetExecutableDirectory();
       std::wstring dllPath = exeDir + L"interception.dll";
+      std::wstring dll64Path = exeDir + L"interception64.dll";
 
       const bool dllPresent =
-          (GetFileAttributesW(dllPath.c_str()) != INVALID_FILE_ATTRIBUTES);
+          (GetFileAttributesW(dllPath.c_str()) != INVALID_FILE_ATTRIBUTES) ||
+          (GetFileAttributesW(dll64Path.c_str()) != INVALID_FILE_ATTRIBUTES);
 
       if (!dllPresent) {
         s_icStatus.state = InterceptionStatus::State::DllMissing;
@@ -537,7 +534,7 @@ void GuiManager::RenderConfigContent() {
       break;
     case InterceptionStatus::State::DllMissing:
       icon = "[  X   ]";
-      statusText = "interception.dll not found next to exe";
+      statusText = "interception.dll/interception64.dll not found next to exe";
       statusColor = ImVec4(0.90f, 0.30f, 0.30f, 1.0f);
       break;
     case InterceptionStatus::State::DriverInactive:
@@ -580,6 +577,15 @@ void GuiManager::RenderConfigContent() {
     if (!driverReady && backend != 1) {
       ImGui::TextDisabled(
           "  Install Interception driver to enable this option.");
+      if (s_icStatus.state == InterceptionStatus::State::DllMissing) {
+        ImGui::TextWrapped("  Place interception.dll or interception64.dll next "
+                           "to StrafeHelper.exe after installing the driver.");
+      } else if (s_icStatus.state ==
+                 InterceptionStatus::State::DriverInactive) {
+        ImGui::TextWrapped("  DLL found, but the kernel driver is not running. "
+                           "Run the Interception installer as administrator.");
+      }
+      ImGui::TextWrapped("  Driver: github.com/oblitum/Interception/releases");
     }
   }
 
@@ -649,8 +655,18 @@ void GuiManager::RenderStateContent() {
   const ImVec4 colActive = ImVec4(0.4f, 0.85f, 1.0f, 1.0f);
   const ImVec4 colLabel = ImVec4(0.65f, 0.65f, 0.72f, 1.0f);
 
-  auto StatusDot = [&](bool active) {
-    ImGui::TextColored(active ? colOn : colOff, active ? "[ON] " : "[OFF]");
+  enum class FeatureStatus { Off, Idle, Active };
+  auto StatusDot = [&](FeatureStatus status) {
+    const char *label = "[OFF]";
+    ImVec4 color = colOff;
+    if (status == FeatureStatus::Idle) {
+      label = "[IDLE]";
+      color = colLabel;
+    } else if (status == FeatureStatus::Active) {
+      label = "[ACTIVE]";
+      color = colOn;
+    }
+    ImGui::TextColored(color, "%s", label);
   };
 
   auto Tooltip = [](const char *text) {
@@ -706,20 +722,25 @@ void GuiManager::RenderStateContent() {
     const bool enabled = Config::EnableSpam.load(std::memory_order_relaxed);
     const bool active =
         enabled && Globals::g_isCSpamActive.load(std::memory_order_relaxed);
-    StatusDot(active);
+    StatusDot(active ? FeatureStatus::Active
+                     : (enabled ? FeatureStatus::Idle : FeatureStatus::Off));
     ImGui::SameLine();
     ImGui::TextColored(enabled ? colLabel : colOff, "Lurch Strafing");
-    if (active) {
+    if (enabled) {
       ImGui::Indent(16.0f);
-      EnterCriticalSection(&Globals::g_csActiveKeys);
-      const auto keys = Globals::g_activeSpamKeys;
-      LeaveCriticalSection(&Globals::g_csActiveKeys);
-      if (!keys.empty()) {
-        ImGui::TextColored(colActive, "Spamming:");
-        for (int vk : keys) {
-          ImGui::SameLine();
-          ImGui::Text("%c", static_cast<char>(vk));
+      if (active) {
+        EnterCriticalSection(&Globals::g_csActiveKeys);
+        const auto keys = Globals::g_activeSpamKeys;
+        LeaveCriticalSection(&Globals::g_csActiveKeys);
+        if (!keys.empty()) {
+          ImGui::TextColored(colActive, "Spamming:");
+          for (int vk : keys) {
+            ImGui::SameLine();
+            ImGui::Text("%s", FormatVirtualKeyName(vk).c_str());
+          }
         }
+      } else {
+        ImGui::TextColored(colLabel, "Enabled, waiting for trigger.");
       }
       ImGui::Unindent(16.0f);
     }
@@ -728,7 +749,7 @@ void GuiManager::RenderStateContent() {
   // SnapTap
   {
     const bool enabled = Config::EnableSnapTap.load(std::memory_order_relaxed);
-    StatusDot(enabled);
+    StatusDot(enabled ? FeatureStatus::Active : FeatureStatus::Off);
     ImGui::SameLine();
     ImGui::TextColored(enabled ? colLabel : colOff, "SnapTap (SOCD)");
   }
@@ -738,7 +759,8 @@ void GuiManager::RenderStateContent() {
     const bool enabled =
         Config::EnableTurboLoot.load(std::memory_order_relaxed);
     const bool active = enabled && KeybindManager::IsTurboLootActive();
-    StatusDot(active);
+    StatusDot(active ? FeatureStatus::Active
+                     : (enabled ? FeatureStatus::Idle : FeatureStatus::Off));
     ImGui::SameLine();
     ImGui::TextColored(enabled ? colLabel : colOff, "Turbo Loot");
     if (active) {
@@ -755,7 +777,8 @@ void GuiManager::RenderStateContent() {
     const bool enabled =
         Config::EnableTurboJump.load(std::memory_order_relaxed);
     const bool active = enabled && KeybindManager::IsTurboJumpActive();
-    StatusDot(active);
+    StatusDot(active ? FeatureStatus::Active
+                     : (enabled ? FeatureStatus::Idle : FeatureStatus::Off));
     ImGui::SameLine();
     ImGui::TextColored(enabled ? colLabel : colOff, "Turbo Jump");
     if (active) {
@@ -771,7 +794,7 @@ void GuiManager::RenderStateContent() {
   {
     const bool enabled =
         Config::EnableSuperglide.load(std::memory_order_relaxed);
-    StatusDot(enabled);
+    StatusDot(enabled ? FeatureStatus::Idle : FeatureStatus::Off);
     ImGui::SameLine();
     ImGui::TextColored(enabled ? colLabel : colOff, "Superglide");
   }
@@ -779,7 +802,7 @@ void GuiManager::RenderStateContent() {
   // Jitter
   {
     const bool enabled = Config::EnableJitter.load(std::memory_order_relaxed);
-    StatusDot(enabled);
+    StatusDot(enabled ? FeatureStatus::Active : FeatureStatus::Off);
     ImGui::SameLine();
     ImGui::TextColored(enabled ? colLabel : colOff, "Delay Jitter");
     if (enabled) {

@@ -201,6 +201,12 @@ bool HandleBind(int vkCode, bool isKeyDown) {
 
   // Bind the key
   target->store(vkCode);
+  Globals::g_KeyInfo[vkCode].physicalKeyDown.store(true,
+                                                   std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    g_previousKeyState[vkCode] = true;
+  }
   Config::SaveConfig();
 
   Logger::GetInstance().Log("Rebound key to VK " + std::to_string(vkCode));

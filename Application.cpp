@@ -156,8 +156,13 @@ bool DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept {
     return false;
   }
 
-  // Map scan code -> virtual key via Windows API
-  const UINT vkCode = MapVirtualKeyW(evt.scanCode, MAPVK_VSC_TO_VK_EX);
+  UINT scanCode = evt.scanCode;
+  if ((evt.flags & NEO_KEY_E0) != 0u) {
+    scanCode |= 0xE000u;
+  } else if ((evt.flags & NEO_KEY_E1) != 0u) {
+    scanCode |= 0xE100u;
+  }
+  const UINT vkCode = MapVirtualKeyW(scanCode, MAPVK_VSC_TO_VK_EX);
   if (vkCode == 0) {
     return false;
   }
@@ -200,9 +205,7 @@ void SideMouseThreadFunc() noexcept {
       lastX2 = x2;
     }
 
-    // Sleep briefly to yield CPU. 1-2ms is fine for human reaction time
-    // and negligible CPU usage, while keeping cursor path 100% free.
-    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 }
 
@@ -224,7 +227,7 @@ void StopSideMouseThread() {
 // Interception polling thread
 // -----------------------------------------------------------------------
 void InterceptionThreadMain() noexcept {
-  constexpr uint32_t kPollTimeoutMs = 50;
+  constexpr uint32_t kPollTimeoutMs = 1;
   constexpr uint32_t kMaxBatch = 32;
   NEO_KEY_EVENT batch[kMaxBatch];
 
@@ -383,28 +386,8 @@ bool InitializeApplication(HINSTANCE hInstance) {
     return false;
   }
 
-  Globals::g_KeyInfo['W'];
-  Globals::g_KeyInfo['A'];
-  Globals::g_KeyInfo['S'];
-  Globals::g_KeyInfo['D'];
-  Globals::g_KeyInfo[VK_XBUTTON1];
-  Globals::g_KeyInfo[VK_XBUTTON2];
-  int triggerKey = Config::KeySpamTrigger.load();
-  if (Globals::g_KeyInfo.find(triggerKey) == Globals::g_KeyInfo.end()) {
-    Globals::g_KeyInfo[triggerKey];
-  }
-  // Register turbo keys
-  int lootKey = Config::TurboLootKey.load();
-  if (Globals::g_KeyInfo.find(lootKey) == Globals::g_KeyInfo.end()) {
-    Globals::g_KeyInfo[lootKey];
-  }
-  int jumpKey = Config::TurboJumpKey.load();
-  if (Globals::g_KeyInfo.find(jumpKey) == Globals::g_KeyInfo.end()) {
-    Globals::g_KeyInfo[jumpKey];
-  }
-  int superglideKey = Config::SuperglideBind.load();
-  if (Globals::g_KeyInfo.find(superglideKey) == Globals::g_KeyInfo.end()) {
-    Globals::g_KeyInfo[superglideKey];
+  for (int vk = 1; vk <= 0xFE; ++vk) {
+    Globals::g_KeyInfo[vk];
   }
   std::cout << "Key states initialized." << std::endl;
 

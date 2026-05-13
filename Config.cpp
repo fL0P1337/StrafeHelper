@@ -1,12 +1,121 @@
 // Config.cpp
 #include "Config.h"
 #include "Logger.h"
+#include "Utils.h"
+#include <cctype>
 #include <fstream>
 #include <string>
 #include <vector>
 #include <windows.h> // For VkKeyScanA
 
 namespace Config {
+namespace {
+std::string TrimCopy(std::string value) {
+  const size_t first = value.find_first_not_of(" \t\n\r\f\v");
+  if (first == std::string::npos) {
+    return "";
+  }
+  const size_t last = value.find_last_not_of(" \t\n\r\f\v");
+  return value.substr(first, last - first + 1);
+}
+
+std::string NormalizeKeyName(std::string value) {
+  value = TrimCopy(value);
+  std::string normalized;
+  normalized.reserve(value.size());
+  for (unsigned char ch : value) {
+    if (ch == ' ' || ch == '_' || ch == '-') {
+      continue;
+    }
+    normalized.push_back(static_cast<char>(std::tolower(ch)));
+  }
+  return normalized;
+}
+
+int ParseKeyValue(const std::string &value, int fallback) {
+  const std::string trimmed = TrimCopy(value);
+  if (trimmed.empty()) {
+    return fallback;
+  }
+  if (trimmed.length() == 1 &&
+      std::isalnum(static_cast<unsigned char>(trimmed[0]))) {
+    return static_cast<int>(
+        std::toupper(static_cast<unsigned char>(trimmed[0])));
+  }
+
+  const std::string key = NormalizeKeyName(trimmed);
+  struct KeyAlias {
+    const char *name;
+    int vk;
+  };
+  static constexpr KeyAlias kAliases[] = {
+      {"ctrl", VK_LCONTROL},      {"control", VK_LCONTROL},
+      {"lctrl", VK_LCONTROL},     {"leftctrl", VK_LCONTROL},
+      {"leftcontrol", VK_LCONTROL},
+      {"rctrl", VK_RCONTROL},     {"rightctrl", VK_RCONTROL},
+      {"rightcontrol", VK_RCONTROL},
+      {"shift", VK_SHIFT},        {"lshift", VK_LSHIFT},
+      {"leftshift", VK_LSHIFT},   {"rshift", VK_RSHIFT},
+      {"rightshift", VK_RSHIFT},  {"alt", VK_LMENU},
+      {"lalt", VK_LMENU},         {"leftalt", VK_LMENU},
+      {"ralt", VK_RMENU},         {"rightalt", VK_RMENU},
+      {"space", VK_SPACE},        {"spacebar", VK_SPACE},
+      {"tab", VK_TAB},            {"enter", VK_RETURN},
+      {"return", VK_RETURN},      {"escape", VK_ESCAPE},
+      {"esc", VK_ESCAPE},         {"backspace", VK_BACK},
+      {"xbutton1", VK_XBUTTON1},  {"mousex1", VK_XBUTTON1},
+      {"mouse4", VK_XBUTTON1},    {"xbutton2", VK_XBUTTON2},
+      {"mousex2", VK_XBUTTON2},   {"mouse5", VK_XBUTTON2},
+  };
+  for (const auto &alias : kAliases) {
+    if (key == alias.name) {
+      return alias.vk;
+    }
+  }
+
+  try {
+    return std::stoi(trimmed);
+  } catch (...) {
+    return fallback;
+  }
+}
+
+std::string FormatConfigKey(int vk) {
+  if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) {
+    return std::string(1, static_cast<char>(vk));
+  }
+
+  switch (vk) {
+  case VK_CONTROL:
+    return "Ctrl";
+  case VK_LCONTROL:
+    return "LCtrl";
+  case VK_RCONTROL:
+    return "RCtrl";
+  case VK_SHIFT:
+    return "Shift";
+  case VK_LSHIFT:
+    return "LShift";
+  case VK_RSHIFT:
+    return "RShift";
+  case VK_MENU:
+    return "Alt";
+  case VK_LMENU:
+    return "LAlt";
+  case VK_RMENU:
+    return "RAlt";
+  case VK_SPACE:
+    return "Space";
+  case VK_XBUTTON1:
+    return "XButton1";
+  case VK_XBUTTON2:
+    return "XButton2";
+  default:
+    return std::to_string(vk);
+  }
+}
+} // namespace
+
 // --- Definitions of extern variables from Config.h ---
 const char APP_NAME[] = "StrafeHelper";
 const char VERSION[] = "1.2_modular"; // Updated version
@@ -63,7 +172,7 @@ void LoadConfig() {
                          "' not found. Using defaults.\n";
     logMsg += " Defaults: Delay=" + std::to_string(SpamDelayMs.load()) +
               "ms, Duration=" + std::to_string(SpamKeyDownDurationMs.load()) +
-              "ms, Trigger=" + static_cast<char>(KeySpamTrigger.load()) +
+              "ms, Trigger=" + FormatVirtualKeyName(KeySpamTrigger.load()) +
               ", Spam=" + (EnableSpam.load() ? "true" : "false") +
               ", SnapTap=" + (EnableSnapTap.load() ? "true" : "false");
     Logger::GetInstance().Log(logMsg);
@@ -120,12 +229,8 @@ void LoadConfig() {
         EnableSnapTap = (value == "true" || value == "1");
       else if (key == "KEY_SPAM_TRIGGER") {
         if (!value.empty()) {
-          // If value is a single digit/letter, treat as char. Otherwise try parse as int.
-          if (value.length() == 1 && isalnum(value[0])) {
-             KeySpamTrigger = static_cast<int>(toupper(value[0]));
-          } else {
-             try { KeySpamTrigger = std::stoi(value); } catch(...) {}
-          }
+          KeySpamTrigger = ParseKeyValue(
+              value, KeySpamTrigger.load(std::memory_order_relaxed));
         }
       }
       else if (key == "key_spam_trigger_mode") {
@@ -136,11 +241,8 @@ void LoadConfig() {
       else if (key == "enable_turbo_loot")
         EnableTurboLoot = (value == "true" || value == "1");
       else if (key == "turbo_loot_key") {
-        if (!value.empty() && value.length() == 1 && isalnum(value[0])) {
-           TurboLootKey = static_cast<int>(toupper(value[0]));
-        } else {
-           try { TurboLootKey = std::stoi(value); } catch(...) {}
-        }
+        TurboLootKey =
+            ParseKeyValue(value, TurboLootKey.load(std::memory_order_relaxed));
       }
       else if (key == "turbo_loot_delay")
         TurboLootDelayMs = std::stoi(value);
@@ -154,11 +256,8 @@ void LoadConfig() {
       else if (key == "enable_turbo_jump")
         EnableTurboJump = (value == "true" || value == "1");
       else if (key == "turbo_jump_key") {
-        if (!value.empty() && value.length() == 1 && isalnum(value[0])) {
-           TurboJumpKey = static_cast<int>(toupper(value[0]));
-        } else {
-           try { TurboJumpKey = std::stoi(value); } catch(...) {}
-        }
+        TurboJumpKey =
+            ParseKeyValue(value, TurboJumpKey.load(std::memory_order_relaxed));
       }
       else if (key == "turbo_jump_delay")
         TurboJumpDelayMs = std::stoi(value);
@@ -177,11 +276,8 @@ void LoadConfig() {
       else if (key == "enable_superglide")
         EnableSuperglide = (value == "true" || value == "1");
       else if (key == "superglide_bind") {
-        if (!value.empty() && value.length() == 1 && isalnum(value[0])) {
-           SuperglideBind = static_cast<int>(toupper(value[0]));
-        } else {
-           try { SuperglideBind = std::stoi(value); } catch(...) {}
-        }
+        SuperglideBind = ParseKeyValue(
+            value, SuperglideBind.load(std::memory_order_relaxed));
       }
       else if (key == "target_fps") {
         double fps = std::stod(value);
@@ -229,7 +325,7 @@ void LoadConfig() {
   logMsg += "  enable_snaptap: " +
             std::string(EnableSnapTap.load() ? "true" : "false") + "\n";
   logMsg += "  KEY_SPAM_TRIGGER: " +
-            std::string(1, static_cast<char>(KeySpamTrigger.load())) +
+            FormatVirtualKeyName(KeySpamTrigger.load()) +
             " (VK: " + std::to_string(KeySpamTrigger.load()) + ")\n";
   logMsg += "  enable_turbo_loot: " +
             std::string(EnableTurboLoot.load() ? "true" : "false") + "\n";
@@ -255,26 +351,18 @@ void SaveConfig() {
   const std::string isLockedStr = IsLocked.load() ? "true" : "false";
   const std::string enableSpamStr = EnableSpam.load() ? "true" : "false";
   const std::string snapTapStr = EnableSnapTap.load() ? "true" : "false";
-  // Helper to format key value (char if printable, else int)
-  auto FormatKey = [](int vk) -> std::string {
-    if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) {
-      return std::string(1, static_cast<char>(vk));
-    }
-    return std::to_string(vk);
-  };
-
-  const std::string triggerStr = FormatKey(KeySpamTrigger.load());
+  const std::string triggerStr = FormatConfigKey(KeySpamTrigger.load());
   const std::string turboLootStr = EnableTurboLoot.load() ? "true" : "false";
-  const std::string turboLootKeyStr = FormatKey(TurboLootKey.load());
+  const std::string turboLootKeyStr = FormatConfigKey(TurboLootKey.load());
   const std::string turboLootDelayStr = std::to_string(TurboLootDelayMs.load());
   const std::string turboLootDurStr =
       std::to_string(TurboLootDurationMs.load());
   const std::string turboJumpStr = EnableTurboJump.load() ? "true" : "false";
-  const std::string turboJumpKeyStr = FormatKey(TurboJumpKey.load());
+  const std::string turboJumpKeyStr = FormatConfigKey(TurboJumpKey.load());
   const std::string turboJumpDelayStr = std::to_string(TurboJumpDelayMs.load());
   const std::string turboJumpDurStr =
       std::to_string(TurboJumpDurationMs.load());
-  const std::string superglideBindStr = FormatKey(SuperglideBind.load());
+  const std::string superglideBindStr = FormatConfigKey(SuperglideBind.load());
 
   // Update-in-place: preserve unknown keys/comments, replace known keys, append
   // missing ones.

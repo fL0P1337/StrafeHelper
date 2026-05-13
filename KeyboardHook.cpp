@@ -73,18 +73,18 @@ bool AxisOnKeyUp(AxisState &axis, int vk) {
 
 void SendKeyDownImmediate(int vkCode) {
   INPUT input = {INPUT_KEYBOARD};
-  input.ki.wVk = vkCode;
-  input.ki.wScan = MapVirtualKey(vkCode, MAPVK_VK_TO_VSC);
-  input.ki.dwFlags = KEYEVENTF_SCANCODE;
+  input.ki.wVk = 0;
+  input.ki.wScan = VirtualKeyToScanCode(vkCode);
+  input.ki.dwFlags = VirtualKeyInputFlags(vkCode, true);
   input.ki.dwExtraInfo = GetMessageExtraInfo();
   SendInput(1, &input, sizeof(INPUT));
 }
 
 void SendKeyUpImmediate(int vkCode) {
   INPUT input = {INPUT_KEYBOARD};
-  input.ki.wVk = vkCode;
-  input.ki.wScan = MapVirtualKey(vkCode, MAPVK_VK_TO_VSC);
-  input.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
+  input.ki.wVk = 0;
+  input.ki.wScan = VirtualKeyToScanCode(vkCode);
+  input.ki.dwFlags = VirtualKeyInputFlags(vkCode, false);
   input.ki.dwExtraInfo = GetMessageExtraInfo();
   SendInput(1, &input, sizeof(INPUT));
 }
@@ -170,9 +170,9 @@ void SendKeyUpForPhysicallyHeldWasd() {
     if (Globals::g_KeyInfo[key].physicalKeyDown.load(
             std::memory_order_relaxed)) {
       INPUT input = {INPUT_KEYBOARD};
-      input.ki.wVk = key;
-      input.ki.wScan = MapVirtualKey(key, MAPVK_VK_TO_VSC);
-      input.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
+      input.ki.wVk = 0;
+      input.ki.wScan = VirtualKeyToScanCode(key);
+      input.ki.dwFlags = VirtualKeyInputFlags(key, false);
       input.ki.dwExtraInfo = GetMessageExtraInfo();
       keyUpInputs.push_back(input);
     }
@@ -192,9 +192,9 @@ void SendKeyDownForPhysicallyHeldWasd() {
     if (Globals::g_KeyInfo[key].physicalKeyDown.load(
             std::memory_order_relaxed)) {
       INPUT input = {INPUT_KEYBOARD};
-      input.ki.wVk = key;
-      input.ki.wScan = MapVirtualKey(key, MAPVK_VK_TO_VSC);
-      input.ki.dwFlags = KEYEVENTF_SCANCODE;
+      input.ki.wVk = 0;
+      input.ki.wScan = VirtualKeyToScanCode(key);
+      input.ki.dwFlags = VirtualKeyInputFlags(key, true);
       input.ki.dwExtraInfo = GetMessageExtraInfo();
       keyDownInputs.push_back(input);
     }
@@ -218,13 +218,13 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
   bool isKeyDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
   bool isKeyUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
 
+  if (pKeybd->flags & LLKHF_INJECTED) {
+    return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam); // Globals::
+  }
+
   // Handle dynamic keybinding capture
   if (KeybindManager::HandleBind(vkCode, isKeyDown)) {
     return 1;
-  }
-
-  if (pKeybd->flags & LLKHF_INJECTED) {
-    return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam); // Globals::
   }
 
   auto itKeyInfo = Globals::g_KeyInfo.find(vkCode);            // Globals::

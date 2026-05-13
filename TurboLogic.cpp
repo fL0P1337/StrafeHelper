@@ -39,9 +39,9 @@ void RunTurboLoop(std::atomic<bool> &stopRequest, HANDLE eventHandle,
     const int key = configKey.load(std::memory_order_relaxed);
 
     INPUT input = {INPUT_KEYBOARD};
-    input.ki.wVk = key;
-    input.ki.wScan = MapVirtualKey(key, MAPVK_VK_TO_VSC);
-    input.ki.dwFlags = KEYEVENTF_SCANCODE;
+    input.ki.wVk = 0;
+    input.ki.wScan = VirtualKeyToScanCode(key);
+    input.ki.dwFlags = VirtualKeyInputFlags(key, true);
     input.ki.dwExtraInfo = GetMessageExtraInfo();
     SendInput(1, &input, sizeof(INPUT));
 
@@ -54,7 +54,7 @@ void RunTurboLoop(std::atomic<bool> &stopRequest, HANDLE eventHandle,
     }
 
     // Send key-up
-    input.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
+    input.ki.dwFlags = VirtualKeyInputFlags(key, false);
     SendInput(1, &input, sizeof(INPUT));
   }
 

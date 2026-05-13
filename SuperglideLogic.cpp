@@ -36,18 +36,17 @@ std::condition_variable g_superglideCv;
 // Injects a single key tap (down then up) using KEYEVENTF_SCANCODE.
 // Matches the injection style used throughout the rest of the codebase.
 static void InjectKeyTap(int vk) noexcept {
-  const WORD sc = static_cast<WORD>(MapVirtualKey(vk, MAPVK_VK_TO_VSC));
   INPUT inputs[2]{};
 
   inputs[0].type = INPUT_KEYBOARD;
   inputs[0].ki.wVk = 0;
-  inputs[0].ki.wScan = sc;
-  inputs[0].ki.dwFlags = KEYEVENTF_SCANCODE;
+  inputs[0].ki.wScan = VirtualKeyToScanCode(vk);
+  inputs[0].ki.dwFlags = VirtualKeyInputFlags(vk, true);
 
   inputs[1].type = INPUT_KEYBOARD;
   inputs[1].ki.wVk = 0;
-  inputs[1].ki.wScan = sc;
-  inputs[1].ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
+  inputs[1].ki.wScan = VirtualKeyToScanCode(vk);
+  inputs[1].ki.dwFlags = VirtualKeyInputFlags(vk, false);
 
   SendInput(2, inputs, sizeof(INPUT));
 }
