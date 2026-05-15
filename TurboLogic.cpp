@@ -7,15 +7,23 @@
 #include <atomic>
 #include <iostream>
 #include <random>
+#include <timeapi.h>
 #include <windows.h>
+
+#pragma comment(lib, "winmm.lib")
 
 namespace {
 
 void RunTurboLoop(std::atomic<bool> &stopRequest, HANDLE eventHandle,
-                  std::atomic<bool> &configEnable,
-                  std::atomic<int> &configKey, std::atomic<int> &configDelay,
+                  std::atomic<bool> &configEnable, std::atomic<int> &configKey,
+                  std::atomic<int> &configDelay,
                   std::atomic<int> &configDuration, bool (*isActiveFunc)(),
                   const char *threadName) {
+  timeBeginPeriod(1);
+
+  LARGE_INTEGER freq;
+  QueryPerformanceFrequency(&freq);
+
   while (!stopRequest.load(std::memory_order_relaxed)) {
     DWORD timeout = INFINITE;
 
@@ -48,7 +56,28 @@ void RunTurboLoop(std::atomic<bool> &stopRequest, HANDLE eventHandle,
     DWORD duration =
         ApplyJitter(configDuration.load(std::memory_order_relaxed));
     if (duration > 0) {
-      Sleep(duration);
+      LARGE_INTEGER start;
+      QueryPerformanceCounter(&start);
+      // duration is in milliseconds. Convert to ticks: duration * (freq / 1000)
+      const LONGLONG durationTicks =
+          static_cast<LONGLONG>(duration) * (freq.QuadPart / 1000LL);
+      const LONGLONG targetTick = start.QuadPart + durationTicks;
+      const LONGLONG spinThreshold = freq.QuadPart / 2000LL; // 0.5 ms in ticks
+
+      LARGE_INTEGER now;
+      do {
+        QueryPerformanceCounter(&now);
+        const LONGLONG remaining = targetTick - now.QuadPart;
+
+        if (stopRequest.load(std::memory_order_relaxed)) {
+          break;
+        }
+
+        if (remaining > spinThreshold) {
+          Sleep(1);
+        }
+      } while (now.QuadPart < targetTick);
+
       if (stopRequest.load(std::memory_order_relaxed))
         break;
     }
@@ -58,6 +87,7 @@ void RunTurboLoop(std::atomic<bool> &stopRequest, HANDLE eventHandle,
     SendInput(1, &input, sizeof(INPUT));
   }
 
+  timeEndPeriod(1);
   std::cout << threadName << " thread exiting." << std::endl;
 }
 
