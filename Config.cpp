@@ -1,6 +1,8 @@
 // Config.cpp
 #include "Config.h"
 #include "Logger.h"
+#include <unordered_map>
+#include <string_view>
 #include "Utils.h"
 #include <cctype>
 #include <fstream>
@@ -418,6 +420,12 @@ void SaveConfig() {
     s = s.substr(first, last - first + 1);
   };
 
+  std::unordered_map<std::string_view, size_t> entryMap;
+  const size_t numEntries = sizeof(entries) / sizeof(entries[0]);
+  for (size_t i = 0; i < numEntries; ++i) {
+    entryMap[entries[i].key] = i;
+  }
+
   for (std::string &line : lines) {
     std::string working = line;
     trim(working);
@@ -438,12 +446,11 @@ void SaveConfig() {
       continue;
     }
 
-    for (auto &e : entries) {
-      if (key == e.key) {
-        line = key + " = " + e.value;
-        e.found = true;
-        break;
-      }
+    auto it = entryMap.find(key);
+    if (it != entryMap.end()) {
+      size_t idx = it->second;
+      line = key + " = " + entries[idx].value;
+      entries[idx].found = true;
     }
   }
 
