@@ -8,9 +8,10 @@
 #include <iostream>
 #include <random>
 #include <thread>
+#include <timeapi.h>
 #include <vector>
 #include <windows.h>
-
+#pragma comment(lib, "winmm.lib")
 
 namespace {
 std::atomic<bool> g_stopSpamThreadRequest = false;
@@ -37,6 +38,11 @@ void GetSpamSnapshot(std::vector<int> &keys, unsigned long long &epoch) {
 } // namespace
 
 DWORD WINAPI SpamThread(LPVOID lpParam) {
+  timeBeginPeriod(1);
+  LARGE_INTEGER freq;
+  QueryPerformanceFrequency(&freq);
+  const LONGLONG spinThreshold = freq.QuadPart / 2000LL; // 0.5 ms in ticks
+
   std::vector<int> localActiveKeys;
   localActiveKeys.reserve(8);
   std::vector<int> virtuallyDownKeys;
@@ -83,7 +89,30 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
       }
     }
 
-    WaitForSingleObject(Globals::g_hSpamEvent, waitTimeout);
+    if (waitTimeout == INFINITE) {
+      WaitForSingleObject(Globals::g_hSpamEvent, INFINITE);
+    } else {
+      LARGE_INTEGER start;
+      QueryPerformanceCounter(&start);
+      const LONGLONG delayTicks =
+          (static_cast<LONGLONG>(waitTimeout) * freq.QuadPart) / 1000LL;
+      const LONGLONG targetTick = start.QuadPart + delayTicks;
+
+      LARGE_INTEGER now;
+      do {
+        QueryPerformanceCounter(&now);
+        if (g_stopSpamThreadRequest.load(std::memory_order_relaxed))
+          break;
+        const LONGLONG remaining = targetTick - now.QuadPart;
+        if (remaining > spinThreshold) {
+          if (WaitForSingleObject(Globals::g_hSpamEvent, 1) == WAIT_OBJECT_0)
+            break;
+        } else if (remaining > 0) {
+          if (WaitForSingleObject(Globals::g_hSpamEvent, 0) == WAIT_OBJECT_0)
+            break;
+        }
+      } while (now.QuadPart < targetTick);
+    }
 
     if (g_stopSpamThreadRequest.load(std::memory_order_relaxed)) {
       releaseVirtuallyDownKeys(false);
@@ -107,14 +136,30 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
       continue;
     }
 
-    DWORD keyDownDuration =
-        ApplyJitter(Config::SpamKeyDownDurationMs.load(std::memory_order_relaxed));
+    DWORD keyDownDuration = ApplyJitter(
+        Config::SpamKeyDownDurationMs.load(std::memory_order_relaxed));
     if (keyDownDuration > 0) {
-      Sleep(keyDownDuration);
-      if (g_stopSpamThreadRequest.load(std::memory_order_relaxed)) {
-        releaseVirtuallyDownKeys(false);
+      LARGE_INTEGER start;
+      QueryPerformanceCounter(&start);
+      const LONGLONG durationTicks =
+          (static_cast<LONGLONG>(keyDownDuration) * freq.QuadPart) / 1000LL;
+      const LONGLONG targetTick = start.QuadPart + durationTicks;
+
+      LARGE_INTEGER now;
+      do {
+        QueryPerformanceCounter(&now);
+        if (g_stopSpamThreadRequest.load(std::memory_order_relaxed)) {
+          releaseVirtuallyDownKeys(false);
+          break;
+        }
+        const LONGLONG remaining = targetTick - now.QuadPart;
+        if (remaining > spinThreshold) {
+          Sleep(1);
+        }
+      } while (now.QuadPart < targetTick);
+
+      if (g_stopSpamThreadRequest.load(std::memory_order_relaxed))
         break;
-      }
     }
 
     shouldBeActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
@@ -141,6 +186,7 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
 
   releaseVirtuallyDownKeys(false);
 
+  timeEndPeriod(1);
   std::cout << "Spam thread exiting." << std::endl;
   return 0;
 }
@@ -186,7 +232,8 @@ void CleanupSpamState(bool restoreHeldKeys) {
     Globals::KeyState &state = Globals::g_KeyInfo[key]; // Globals:: (both)
     // ---
     state.spamming.store(false, std::memory_order_relaxed); // Use variable
-    const bool physicallyHeld = state.physicalKeyDown.load(std::memory_order_relaxed);
+    const bool physicallyHeld =
+        state.physicalKeyDown.load(std::memory_order_relaxed);
     if (physicallyHeld) {
       physicallyHeldKeys.push_back(key);
       if (restoreHeldKeys) {
