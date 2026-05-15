@@ -25,7 +25,8 @@ inline bool IsAxisYKey(int vk) { return (vk == 'W' || vk == 'S'); }
 // Y axis: W <-> S
 struct AxisState {
   int activeKey = 0;
-  std::vector<int> physicallyHeld; // press order (LIFO last)
+  int heldCount = 0;
+  int physicallyHeld[2] = {0, 0}; // press order (LIFO last)
 };
 
 AxisState g_axisX;
@@ -44,31 +45,44 @@ AxisState *AxisForVk(int vk) {
   return nullptr;
 }
 
-bool AxisContains(const AxisState &axis, int vk) {
-  return (std::find(axis.physicallyHeld.begin(), axis.physicallyHeld.end(),
-                    vk) != axis.physicallyHeld.end());
+inline bool AxisContains(const AxisState &axis, int vk) {
+  return (axis.heldCount > 0 && axis.physicallyHeld[0] == vk) ||
+         (axis.heldCount > 1 && axis.physicallyHeld[1] == vk);
 }
 
 // Returns true only for a real up->down transition (ignores autorepeat).
 bool AxisOnKeyDown(AxisState &axis, int vk) {
   if (!AxisContains(axis, vk)) {
-    axis.physicallyHeld.push_back(vk);
-    axis.activeKey = vk;
-    return true;
+    if (axis.heldCount < 2) {
+      axis.physicallyHeld[axis.heldCount++] = vk;
+      axis.activeKey = vk;
+      return true;
+    }
   }
   return false;
 }
 
 bool AxisOnKeyUp(AxisState &axis, int vk) {
-  auto it =
-      std::find(axis.physicallyHeld.begin(), axis.physicallyHeld.end(), vk);
-  if (it == axis.physicallyHeld.end()) {
+  if (axis.heldCount == 0) {
     return false;
   }
 
-  axis.physicallyHeld.erase(it);
-  axis.activeKey = axis.physicallyHeld.empty() ? 0 : axis.physicallyHeld.back();
-  return true;
+  if (axis.physicallyHeld[0] == vk) {
+    if (axis.heldCount == 2) {
+      axis.physicallyHeld[0] = axis.physicallyHeld[1];
+      axis.heldCount = 1;
+      axis.activeKey = axis.physicallyHeld[0];
+    } else {
+      axis.heldCount = 0;
+      axis.activeKey = 0;
+    }
+    return true;
+  } else if (axis.heldCount == 2 && axis.physicallyHeld[1] == vk) {
+    axis.heldCount = 1;
+    axis.activeKey = axis.physicallyHeld[0];
+    return true;
+  }
+  return false;
 }
 
 void SendKeyDownImmediate(int vkCode) {
