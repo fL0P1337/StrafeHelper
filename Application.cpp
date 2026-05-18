@@ -169,13 +169,6 @@ bool DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept {
   return HandleFeatureKeyEvent(static_cast<int>(vkCode), isKeyDown);
 }
 
-// -----------------------------------------------------------------------
-
-void HandleSideMouseButton(int vkCode, bool isDown) {
-  if (!KeybindManager::HandleBind(vkCode, isDown)) {
-    HandleFeatureKeyEvent(vkCode, isDown);
-  }
-}
 
 // Interception polling thread
 // -----------------------------------------------------------------------
@@ -227,6 +220,12 @@ void StopHookThread() {
   }
 }
 } // anonymous namespace
+
+void HandleSideMouseButton(int vkCode, bool isDown) {
+  if (!KeybindManager::HandleBind(vkCode, isDown)) {
+    HandleFeatureKeyEvent(vkCode, isDown);
+  }
+}
 
 // -----------------------------------------------------------------------
 // Original WinHook thread function — unchanged
