@@ -1,0 +1,30 @@
+name: Combine
+on: create
+
+permissions: write-all
+
+jobs:
+  combine:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.ref_type == 'branch'}}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - uses: bobvanderlinden/combine-pull-requests@master
+        with:
+          label: ${{ github.event.ref }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.event.ref }}
+      - name: Create pull request
+        uses: devops-infra/action-pull-request@v0.4.1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          title: "[${{ github.event.ref }}] combined!"
+          source_branch: ${{ github.event.ref }}
+          target_branch: main
+          label: "bundle"
