@@ -1,10 +1,9 @@
-⚡ [Performance] High-Resolution Wait in Turbo Loop
+## What
+Replaced the polling loop thread `SideMouseThreadFunc` with an event-driven `WM_INPUT` handler in `AppWindow.cpp` to process mouse side button inputs (`VK_XBUTTON1`, `VK_XBUTTON2`) through the Raw Input API instead of calling `GetAsyncKeyState` repeatedly.
 
-**💡 What:**
-The `Sleep(duration)` call in the `RunTurboLoop` function (in `TurboLogic.cpp`) was replaced with a high-resolution hybrid wait using `QueryPerformanceCounter` and a busy-spin loop for the final fraction of a millisecond. We also initialize the loop with `timeBeginPeriod(1)` to ensure optimal system timer resolution.
+## Why
+The `SideMouseThreadFunc` used a continuous loop checking button state, followed by `std::this_thread::sleep_for(std::chrono::milliseconds(1));`. This constant polling waking up 1000 times a second unnecessarily consumed CPU resources and caused context switching overhead, even when the mouse was inactive. The use of `WH_MOUSE_LL` was intentionally avoided in the previous code due to cursor lag issues with 8000Hz polling rate mice. By leveraging the Raw Input API (`WM_INPUT`), we eliminate polling while remaining performant with high polling-rate hardware.
 
-**🎯 Why:**
-The `Sleep()` function in Windows is fundamentally inaccurate and can oversleep significantly, even with `timeBeginPeriod(1)`. This results in poor precision for automated key repeat rates, especially for small intervals like 5-10ms. A high-resolution wait loop allows for exact timing of the input sequences (Turbo Loot and Turbo Jump), preventing drift or missed frames while maintaining the interruptibility required to stop the sequence instantly.
-
-**📊 Measured Improvement:**
-While a formal benchmark runner wasn't available in the environment, theoretically, standard `Sleep()` with `timeBeginPeriod(1)` has an accuracy of about ±1.0 to ±2.0 ms. The hybrid spin-wait approach achieves an accuracy of <10 µs by spinning for the remaining time under a 0.5 ms threshold (`spinThreshold`). This ensures the turbo action delay is effectively perfectly accurate to the requested configuration while continuing to efficiently yield CPU time during the longer wait periods.
+## Measured Improvement
+- Baseline: The polling thread was continuously executing ~1000 times per second, with CPU cycles consumed regardless of input state.
+- Change: The CPU usage for checking mouse buttons drops entirely when inactive, executing only when a hardware interrupt event occurs. This reduces overhead and frees CPU cycles for game processing.

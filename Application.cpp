@@ -44,7 +44,7 @@ std::atomic<bool> g_isCSpamActive{false};
 SuperglideStats g_superglideStats{};
 
 // --- Binding State ---
-std::atomic<std::atomic<int>*> g_bindingTarget{nullptr};
+std::atomic<std::atomic<int> *> g_bindingTarget{nullptr};
 
 } // namespace Globals
 // --- End Global Variable Definitions ---
@@ -57,8 +57,6 @@ std::unique_ptr<InputBackend> g_interceptionBackend;
 std::thread g_interceptionThread;
 std::atomic<bool> g_interceptionRunning{false};
 std::mutex g_backendMutex; // guards start/stop of interception thread
-std::thread g_sideMouseThread;
-std::atomic<bool> g_sideMouseRunning{false};
 
 // -----------------------------------------------------------------------
 // Shared keybind dispatch logic used by both interception keyboard events
@@ -171,53 +169,16 @@ bool DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept {
   return HandleFeatureKeyEvent(static_cast<int>(vkCode), isKeyDown);
 }
 
+}
+
 // -----------------------------------------------------------------------
-// Side-mouse polling thread (XBUTTON1/2) using GetAsyncKeyState
-// This avoids using WH_MOUSE_LL hooks which cause cursor lag on 8000Hz mice.
-// -----------------------------------------------------------------------
-void SideMouseThreadFunc() noexcept {
-  bool lastX1 = false;
-  bool lastX2 = false;
 
-  while (g_sideMouseRunning.load(std::memory_order_relaxed)) {
-    // Check hardware state directly (MSB set = down)
-    // 0x8000 is the high-order bit for "currently down"
-    const bool x1 = (GetAsyncKeyState(VK_XBUTTON1) & 0x8000) != 0;
-    const bool x2 = (GetAsyncKeyState(VK_XBUTTON2) & 0x8000) != 0;
-
-    if (x1 != lastX1) {
-      if (!KeybindManager::HandleBind(VK_XBUTTON1, x1)) {
-        HandleFeatureKeyEvent(VK_XBUTTON1, x1);
-      }
-      lastX1 = x1;
-    }
-
-    if (x2 != lastX2) {
-      if (!KeybindManager::HandleBind(VK_XBUTTON2, x2)) {
-        HandleFeatureKeyEvent(VK_XBUTTON2, x2);
-      }
-      lastX2 = x2;
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+void HandleSideMouseButton(int vkCode, bool isDown) {
+  if (!KeybindManager::HandleBind(vkCode, isDown)) {
+    HandleFeatureKeyEvent(vkCode, isDown);
   }
 }
 
-void StartSideMouseThread() {
-  if (g_sideMouseRunning.load()) return;
-  g_sideMouseRunning.store(true);
-  g_sideMouseThread = std::thread(SideMouseThreadFunc);
-  std::cout << "Side mouse polling thread started." << std::endl;
-}
-
-void StopSideMouseThread() {
-  g_sideMouseRunning.store(false);
-  if (g_sideMouseThread.joinable()) {
-    g_sideMouseThread.join();
-  }
-}
-
-// -----------------------------------------------------------------------
 // Interception polling thread
 // -----------------------------------------------------------------------
 void InterceptionThreadMain() noexcept {
@@ -385,8 +346,6 @@ bool InitializeApplication(HINSTANCE hInstance) {
   }
   std::cout << "Key states initialized." << std::endl;
 
-  StartSideMouseThread();
-
   // --- Start the selected input backend ---
   const auto backendKind =
       static_cast<Config::InputBackendKind>(Config::SelectedBackend.load());
@@ -417,7 +376,6 @@ bool InitializeApplication(HINSTANCE hInstance) {
         CreateThread(NULL, 0, HookThreadFunc, NULL, 0, NULL);
     if (!Globals::g_hHookThread) {
     hook_thread_failed:
-      StopSideMouseThread();
       if (Globals::g_hWindow)
         DestroyWindow(Globals::g_hWindow);
       UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
@@ -442,8 +400,6 @@ bool InitializeApplication(HINSTANCE hInstance) {
     } else {
       StopHookThread();
     }
-
-    StopSideMouseThread();
 
     if (Globals::g_hWindow)
       DestroyWindow(Globals::g_hWindow);
@@ -471,7 +427,6 @@ bool InitializeApplication(HINSTANCE hInstance) {
 void CleanupApplication() {
   std::cout << "--- Starting Application Cleanup ---" << std::endl;
 
-  StopSideMouseThread();
   StopSpamThread();
   StopTurboLootThread();
   StopTurboJumpThread();
