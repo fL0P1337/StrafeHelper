@@ -12,7 +12,7 @@
 
 namespace Config {
 namespace {
-std::string TrimCopy(std::string value) {
+std::string TrimCopy(const std::string& value) {
   const size_t first = value.find_first_not_of(" \t\n\r\f\v");
   if (first == std::string::npos) {
     return "";
@@ -21,11 +21,11 @@ std::string TrimCopy(std::string value) {
   return value.substr(first, last - first + 1);
 }
 
-std::string NormalizeKeyName(std::string value) {
-  value = TrimCopy(value);
+std::string NormalizeKeyName(const std::string& value) {
+  std::string trimmed = TrimCopy(value);
   std::string normalized;
-  normalized.reserve(value.size());
-  for (unsigned char ch : value) {
+  normalized.reserve(trimmed.size());
+  for (unsigned char ch : trimmed) {
     if (ch == ' ' || ch == '_' || ch == '-') {
       continue;
     }
@@ -76,7 +76,7 @@ int ParseKeyValue(const std::string &value, int fallback) {
   }
 
   try {
-    return std::stoi(trimmed);
+    return std::stoi(trimmed, nullptr, 0);
   } catch (...) {
     return fallback;
   }
