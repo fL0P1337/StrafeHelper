@@ -4,6 +4,7 @@
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 #include <iostream>
 #include <atomic>
 #include <cstring>
@@ -27,6 +28,15 @@ typedef int BOOL;
 #define WINAPI
 
 typedef unsigned short WORD;
+=======
+
+typedef unsigned long DWORD;
+typedef unsigned short WORD;
+typedef long LONG;
+typedef unsigned int UINT;
+typedef char* LPSTR;
+
+>>>>>>> origin/jules-10012660180567200711-714cdd0a
 #define TEXT(x) x
 
 #define VK_LCONTROL 0xA2
@@ -45,6 +55,7 @@ typedef unsigned short WORD;
 #define VK_BACK 0x08
 #define VK_XBUTTON1 0x05
 #define VK_XBUTTON2 0x06
+<<<<<<< HEAD
 typedef void* HHOOK;
 typedef void* HWND;
 typedef void* HINSTANCE;
@@ -408,3 +419,8 @@ DWORD GetModuleFileNameW(void* hModule, wchar_t* lpFilename, DWORD nSize);
 UINT MapVirtualKeyW(UINT uCode, UINT uMapType);
 int GetKeyNameTextA(LONG lParam, char* lpString, int cchSize);
 >>>>>>> origin/jules-tests-virtualkeytoscan-7065570391822414374
+=======
+
+// Mocking some other things needed for compilation
+void Sleep(DWORD dwMilliseconds);
+>>>>>>> origin/jules-10012660180567200711-714cdd0a

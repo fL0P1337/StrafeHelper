@@ -2,6 +2,7 @@
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 CXX = g++
 <<<<<<< HEAD
 CXXFLAGS = -std=c++20 -I../ -I./mock -g -Wall -fpermissive -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
@@ -32,10 +33,25 @@ test: $(OBJS)
 	$(CXX) $(CXXFLAGS) -o test_runner $(OBJS)
 
 >>>>>>> origin/add-superglide-tests-17935704524920767383
+=======
+CXX = g++
+CXXFLAGS = -std=c++20 -I../ -I./mock -Wall -Wextra
+
+SOURCES = test_config.cpp ../Logger.cpp mock/Utils.cpp
+OBJECTS = $(SOURCES:.cpp=.o)
+
+test: test_runner
+	./test_runner
+
+test_runner: $(OBJECTS)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+>>>>>>> origin/jules-10012660180567200711-714cdd0a
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
+<<<<<<< HEAD
 	rm -f $(OBJS) test_runner
 <<<<<<< HEAD
 =======
@@ -110,3 +126,6 @@ $(TARGET): $(OBJS)
 clean:
 	rm -f $(OBJS) $(TARGET)
 >>>>>>> origin/jules-tests-virtualkeytoscan-7065570391822414374
+=======
+	rm -f $(OBJECTS) test_runner
+>>>>>>> origin/jules-10012660180567200711-714cdd0a
