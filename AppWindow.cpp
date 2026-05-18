@@ -6,7 +6,7 @@
 #include "Utils.h"
 #include <iostream>
 #include <tchar.h>
-#include <windows.h> // <-- Add
+#include <windows.h>
 
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
