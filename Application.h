@@ -4,9 +4,10 @@
 #include "Config.h"
 #include <windows.h>
 
-
 bool InitializeApplication(HINSTANCE hInstance);
 void CleanupApplication();
+
+void HandleSideMouseButton(int vkCode, bool isDown);
 
 // Runtime backend switching (callable from GUI thread).
 // Stops the current backend / hook thread and starts the requested backend.

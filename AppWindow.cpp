@@ -6,15 +6,56 @@
 #include "Utils.h"
 #include <iostream>
 #include <tchar.h>
+<<<<<<< HEAD
+<<<<<<< HEAD
+<<<<<<< HEAD
+<<<<<<< HEAD
+#include <vector>
 #include <windows.h> // <-- Add
+=======
+#include <windows.h>
+>>>>>>> origin/jules-remove-redundant-include-comments-5874034639082053608
+=======
+=======
+>>>>>>> origin/jules-10941152391935524247-dd5c3a06
+=======
+>>>>>>> origin/jules-9587464345051575689-92fd0b04
+#include <windows.h>
 
+>>>>>>> origin/jules-3575531840812500691-7007c21d
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
   case WM_CREATE:
     break;
 
-    break;
+  case WM_INPUT: {
+    UINT dwSize = 0;
+    GetRawInputData((HRAWINPUT)lParam, RID_INPUT, NULL, &dwSize,
+                    sizeof(RAWINPUTHEADER));
+    if (dwSize > 0) {
+      std::vector<BYTE> lpb(dwSize);
+      if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, lpb.data(), &dwSize,
+                          sizeof(RAWINPUTHEADER)) == dwSize) {
+        RAWINPUT *raw = (RAWINPUT *)lpb.data();
+        if (raw->header.dwType == RIM_TYPEMOUSE) {
+          if (raw->data.mouse.usButtonFlags & RI_MOUSE_BUTTON_4_DOWN) {
+            HandleSideMouseButton(VK_XBUTTON1, true);
+          }
+          if (raw->data.mouse.usButtonFlags & RI_MOUSE_BUTTON_4_UP) {
+            HandleSideMouseButton(VK_XBUTTON1, false);
+          }
+          if (raw->data.mouse.usButtonFlags & RI_MOUSE_BUTTON_5_DOWN) {
+            HandleSideMouseButton(VK_XBUTTON2, true);
+          }
+          if (raw->data.mouse.usButtonFlags & RI_MOUSE_BUTTON_5_UP) {
+            HandleSideMouseButton(VK_XBUTTON2, false);
+          }
+        }
+      }
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+  }
 
   case WM_CLOSE:
     std::cout << "WM_CLOSE received, initiating shutdown." << std::endl;
@@ -62,6 +103,15 @@ bool CreateAppWindow(HINSTANCE hInstance) {
     UnregisterClass(Config::WINDOW_CLASS_NAME, hInstance);
     return false;
   }
+
+  // Register raw input for mouse
+  RAWINPUTDEVICE rid[1];
+  rid[0].usUsagePage = 0x01; // HID_USAGE_PAGE_GENERIC
+  rid[0].usUsage = 0x02;     // HID_USAGE_GENERIC_MOUSE
+  rid[0].dwFlags = RIDEV_INPUTSINK;
+  rid[0].hwndTarget = Globals::g_hWindow;
+  RegisterRawInputDevices(rid, 1, sizeof(rid[0]));
+
   std::cout << "Hidden application window created." << std::endl;
   return true;
 }
