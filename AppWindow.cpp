@@ -6,8 +6,12 @@
 #include "Utils.h"
 #include <iostream>
 #include <tchar.h>
+<<<<<<< HEAD
 #include <vector>
 #include <windows.h> // <-- Add
+=======
+#include <windows.h>
+>>>>>>> origin/jules-remove-redundant-include-comments-5874034639082053608
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
