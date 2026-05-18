@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 CXX = g++
 <<<<<<< HEAD
 CXXFLAGS = -std=c++20 -I../ -I./mock -g -Wall -fpermissive -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
@@ -34,3 +35,21 @@ clean:
 test: all
 	./test_superglide
 >>>>>>> origin/jules-13692354564841379828-b7768257
+=======
+# Mock Windows tests makefile
+
+CXX = g++
+CXXFLAGS = -std=c++20 -I.. -I./mock -D_MSC_VER=1900 -Wno-narrowing
+
+TEST_SRCS = ConfigTests.cpp ../Logger.cpp ./mock/UtilsMock.cpp
+TEST_BINS = ConfigTests
+
+test: $(TEST_BINS)
+	./ConfigTests
+
+ConfigTests: $(TEST_SRCS)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+clean:
+	rm -f $(TEST_BINS)
+>>>>>>> origin/add-config-tests-11195440746030750129
