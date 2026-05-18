@@ -76,7 +76,7 @@ int ParseKeyValue(const std::string &value, int fallback) {
   }
 
   try {
-    return std::stoi(trimmed);
+    return std::stoi(trimmed, nullptr, 0);
   } catch (...) {
     return fallback;
   }
