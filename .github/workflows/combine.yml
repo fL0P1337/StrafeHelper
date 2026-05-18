@@ -11,19 +11,37 @@ jobs:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
+
+      - name: Remove pr_description.md from PR branches
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LABEL: ${{ github.event.ref }}
+        run: |
+          git config user.email "action@github.com"
+          git config user.name "GitHub Action"
+          prs=$(gh pr list --label "$LABEL" --json headRefName -q '.[].headRefName')
+          for branch in $prs; do
+            git fetch origin $branch
+            git checkout $branch
+            if [ -f pr_description.md ]; then
+              git rm pr_description.md
+              git commit -m "remove pr_description.md before combine"
+              git push origin $branch
+            fi
+          done
+          git checkout ${{ github.event.ref }}
+
       - uses: bobvanderlinden/combine-pull-requests@master
         with:
           label: ${{ github.event.ref }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Remove pr_description.md
-        run: |
-          git rm --ignore-unmatch pr_description.md
-          git diff --cached --quiet || git commit -m "remove pr_description.md"
+
       - name: Push changes
         uses: ad-m/github-push-action@master
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           branch: ${{ github.event.ref }}
+
       - name: Create pull request
         uses: devops-infra/action-pull-request@v0.4.1
         with:
