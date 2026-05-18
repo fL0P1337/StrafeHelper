@@ -31,7 +31,6 @@ typedef size_t SIZE_T;
 typedef DWORD* LPDWORD;
 
 typedef struct _CRITICAL_SECTION {} CRITICAL_SECTION;
-typedef struct _NOTIFYICONDATA {} NOTIFYICONDATA;
 
 #define WINAPI
 #define CALLBACK
