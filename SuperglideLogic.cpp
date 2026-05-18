@@ -11,7 +11,7 @@
 
 #include "SuperglideLogic.h"
 #include "Config.h"
-#include "Globals.h"
+#include "globals.h"
 #include "Utils.h"
 #include <atomic>
 #include <chrono>

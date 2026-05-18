@@ -1,0 +1,50 @@
+name: Combine
+on: create
+
+permissions: write-all
+
+jobs:
+  combine:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.ref_type == 'branch'}}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Combine PRs manually
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LABEL: ${{ github.event.ref }}
+        run: |
+          git config user.email "action@github.com"
+          git config user.name "GitHub Action"
+
+          git checkout ${{ github.event.ref }}
+
+          prs=$(gh pr list --label "$LABEL" --json headRefName -q '.[].headRefName')
+
+          for branch in $prs; do
+            git fetch origin $branch
+            if ! git merge origin/$branch --no-edit; then
+              git rm --ignore-unmatch pr_description.md
+              git add -A
+              git commit -m "Merge $branch (resolved pr_description.md conflict)"
+            fi
+          done
+
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.event.ref }}
+
+      - name: Create pull request
+        uses: devops-infra/action-pull-request@v0.4.1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          title: "[${{ github.event.ref }}] combined!"
+          body: ""
+          source_branch: ${{ github.event.ref }}
+          target_branch: master
+          label: "bundle"

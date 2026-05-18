@@ -47,6 +47,20 @@ jobs:
         path: x64/${{ matrix.configuration }}/StrafeHelper.exe
         if-no-files-found: error
 
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build tests
+      working-directory: tests
+      run: make all
+
+    - name: Run tests
+      working-directory: tests
+      run: make test
+
   release:
     # Only publish a release on direct pushes to master, not on PRs
     if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')

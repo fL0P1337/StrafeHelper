@@ -1,5 +1,5 @@
 #include "catch.hpp"
-#include "Utils.h"
+#include "../Utils.h"
 #include "Config.h"
 
 TEST_CASE("ApplyJitter behavior", "[Utils]") {
@@ -42,5 +42,15 @@ TEST_CASE("ApplyJitter behavior", "[Utils]") {
             DWORD result = ApplyJitter(baseDelay);
             REQUIRE(result >= 1);
         }
+    }
+}
+
+TEST_CASE("VirtualKeyToScanCode behavior", "[Utils]") {
+    SECTION("Basic mapping") {
+        REQUIRE(VirtualKeyToScanCode(VK_SPACE) == 0x39);
+    }
+
+    SECTION("Extended keys mask mapping") {
+        REQUIRE(VirtualKeyToScanCode(VK_RCONTROL) == 0x1D);
     }
 }
