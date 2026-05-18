@@ -1,10 +1,14 @@
-⚡ [Performance] High-Resolution Wait in Turbo Loop
+# 🧪 [testing improvement] Add test suite for Utils.cpp
 
-**💡 What:**
-The `Sleep(duration)` call in the `RunTurboLoop` function (in `TurboLogic.cpp`) was replaced with a high-resolution hybrid wait using `QueryPerformanceCounter` and a busy-spin loop for the final fraction of a millisecond. We also initialize the loop with `timeBeginPeriod(1)` to ensure optimal system timer resolution.
+🎯 **What:**
+Added a comprehensive test file for `Utils.cpp` under the Linux-compatible unit test suite. `Utils.cpp` contains important core shared utilities such as precision random jitter calculation, virtual key conversion and formatting, robust path detection, and error logging wrapper functions used heavily throughout the multi-threaded system. Testing them directly ensures the backbone of input generation and system state evaluation remains reliable.
 
-**🎯 Why:**
-The `Sleep()` function in Windows is fundamentally inaccurate and can oversleep significantly, even with `timeBeginPeriod(1)`. This results in poor precision for automated key repeat rates, especially for small intervals like 5-10ms. A high-resolution wait loop allows for exact timing of the input sequences (Turbo Loot and Turbo Jump), preventing drift or missed frames while maintaining the interruptibility required to stop the sequence instantly.
+📊 **Coverage:**
+The newly added `test_Utils.cpp` covers:
+- **Jitter logic (`ApplyJitter`):** Verified to remain untouched when disabled, handle edge cases like a jitter scale of zero, apply correct randomized delays inside bounds, and accurately clamp the lower bound to 1 (preventing infinite loops/zero sleep delays).
+- **Virtual key parsing (`FormatVirtualKeyName`):** Correctly mapped hardcoded strings, evaluated alphanumeric single-char fallbacks, and effectively utilized mocked API methods for Windows-dependent lookup fallbacks (e.g., `GetKeyNameTextA`).
+- **Input flag generation (`VirtualKeyToScanCode`, `VirtualKeyInputFlags`):** Correct flags generated based on extended keys, key up events, and simulated scan codes using the mocked `MapVirtualKeyW`.
+- **System util functions (`GetExecutableDirectory`, `LogError`):** Evaluated buffer loading constraints using mocked Windows paths, confirming safe std::string manipulations and error output piping via `std::cerr` without crashing.
 
-**📊 Measured Improvement:**
-While a formal benchmark runner wasn't available in the environment, theoretically, standard `Sleep()` with `timeBeginPeriod(1)` has an accuracy of about ±1.0 to ±2.0 ms. The hybrid spin-wait approach achieves an accuracy of <10 µs by spinning for the remaining time under a 0.5 ms threshold (`spinThreshold`). This ensures the turbo action delay is effectively perfectly accurate to the requested configuration while continuing to efficiently yield CPU time during the longer wait periods.
+✨ **Result:**
+The `Utils.cpp` tests integrate smoothly into the existing `Makefile`-based test runner. This brings isolated validation to previously untested pure functions and wraps the Windows APIs in mocked interfaces, greatly improving test coverage and guaranteeing safety for future refactors of these highly shared utility components.
