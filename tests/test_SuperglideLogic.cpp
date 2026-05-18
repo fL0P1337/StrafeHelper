@@ -27,7 +27,11 @@ void test_StartSuperglideThread_Failure() {
     std::cout << "test_StartSuperglideThread_Failure passed." << std::endl;
 }
 
+<<<<<<< HEAD
 int run_superglide_tests() {
+=======
+int main() {
+>>>>>>> origin/add-superglide-tests-17935704524920767383
     std::cout << "Running test_SuperglideLogic..." << std::endl;
 
     test_StartSuperglideThread_Success();

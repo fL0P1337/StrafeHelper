@@ -1,5 +1,6 @@
 #pragma once
 <<<<<<< HEAD
+<<<<<<< HEAD
 typedef char TCHAR;
 <<<<<<< HEAD
 #define _T(x) x
@@ -13,3 +14,7 @@ typedef char TCHAR;
 #define _tcscmp strcmp
 #define TEXT(x) x
 >>>>>>> origin/add-config-tests-11195440746030750129
+=======
+typedef char TCHAR;
+#define _T(x) x
+>>>>>>> origin/add-superglide-tests-17935704524920767383

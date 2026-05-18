@@ -1,17 +1,25 @@
 #pragma once
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 #include <iostream>
 #include <atomic>
 #include <cstring>
 #include <cstdlib>
+=======
+#include <iostream>
+#include <atomic>
+>>>>>>> origin/add-superglide-tests-17935704524920767383
 #include <thread>
 #include <chrono>
 
 typedef void* HANDLE;
 typedef unsigned long DWORD;
+<<<<<<< HEAD
 typedef unsigned int UINT;
 typedef long LONG;
+=======
+>>>>>>> origin/add-superglide-tests-17935704524920767383
 typedef int BOOL;
 #define NULL 0
 #define WINAPI
@@ -68,6 +76,7 @@ inline int CloseHandle(HANDLE hObject) { return 1; }
 
 typedef long long LONGLONG;
 
+<<<<<<< HEAD
 =======
 
 #define WINAPI
@@ -90,15 +99,21 @@ typedef long LPARAM;
 typedef unsigned int UINT;
 typedef long long LONGLONG;
 >>>>>>> origin/add-config-tests-11195440746030750129
+=======
+>>>>>>> origin/add-superglide-tests-17935704524920767383
 typedef union _LARGE_INTEGER {
     struct {
         DWORD LowPart;
         long HighPart;
 <<<<<<< HEAD
+<<<<<<< HEAD
     };
 =======
     } DUMMYSTRUCTNAME;
 >>>>>>> origin/add-config-tests-11195440746030750129
+=======
+    };
+>>>>>>> origin/add-superglide-tests-17935704524920767383
     struct {
         DWORD LowPart;
         long HighPart;
@@ -107,6 +122,9 @@ typedef union _LARGE_INTEGER {
 } LARGE_INTEGER;
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> origin/add-superglide-tests-17935704524920767383
 #define INFINITE 0xFFFFFFFF
 
 inline int timeBeginPeriod(unsigned int period) { return 0; }
@@ -123,6 +141,7 @@ inline HANDLE CreateThread(void* lpThreadAttributes, size_t dwStackSize, void* l
     }
     return (HANDLE)1;
 }
+<<<<<<< HEAD
 #define MAPVK_VK_TO_VSC 0
 #define MAPVK_VSC_TO_VK 1
 #define MAPVK_VK_TO_CHAR 2
@@ -301,3 +320,5 @@ inline short VkKeyScanA(char ch) {
     return -1;
 >>>>>>> origin/add-config-tests-11195440746030750129
 }
+=======
+>>>>>>> origin/add-superglide-tests-17935704524920767383

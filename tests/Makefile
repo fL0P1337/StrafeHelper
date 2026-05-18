@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 CXX = g++
 <<<<<<< HEAD
 CXXFLAGS = -std=c++20 -I../ -I./mock -g -Wall -fpermissive -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
@@ -15,11 +16,26 @@ test_runner: $(OBJS)
 test_main.o: test_main.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+=======
+CXX = g++
+CXXFLAGS = -std=c++20 -I../ -I./mock -g -Wall -fpermissive
+
+SRCS = ../SuperglideLogic.cpp ../globals.h
+TEST_SRCS = test_SuperglideLogic.cpp stub_utils.cpp stub_config.cpp stub_globals.cpp
+OBJS = ../SuperglideLogic.o stub_globals.o test_SuperglideLogic.o stub_utils.o stub_config.o
+
+all: test
+
+test: $(OBJS)
+	$(CXX) $(CXXFLAGS) -o test_runner $(OBJS)
+
+>>>>>>> origin/add-superglide-tests-17935704524920767383
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
 	rm -f $(OBJS) test_runner
+<<<<<<< HEAD
 =======
 CXXFLAGS = -std=c++20 -I. -I./mock -pthread
 TARGETS = test_superglide
@@ -53,3 +69,5 @@ ConfigTests: $(TEST_SRCS)
 clean:
 	rm -f $(TEST_BINS)
 >>>>>>> origin/add-config-tests-11195440746030750129
+=======
+>>>>>>> origin/add-superglide-tests-17935704524920767383
