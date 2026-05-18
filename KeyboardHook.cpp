@@ -1,14 +1,14 @@
 // KeyboardHook.cpp
 #include "KeyboardHook.h"
 #include "Config.h"
-#include "Globals.h" // <-- Add
+#include "Globals.h"
 #include "KeybindManager.h"
 #include "SpamLogic.h"
 #include "Utils.h"
-#include <algorithm> // <-- Add
+#include <algorithm>
 #include <iostream>
 #include <vector>
-#include <windows.h> // <-- Add (needed for KBDLLHOOKSTRUCT etc)
+#include <windows.h>
 
 namespace {
 
