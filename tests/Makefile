@@ -1,4 +1,5 @@
 CXX = g++
+<<<<<<< HEAD
 CXXFLAGS = -std=c++20 -I../ -I./mock -g -Wall -fpermissive -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
 
 SRCS = ../SuperglideLogic.cpp ../Utils.cpp ../globals.h ../Config.cpp
@@ -18,3 +19,18 @@ test_main.o: test_main.cpp
 
 clean:
 	rm -f $(OBJS) test_runner
+=======
+CXXFLAGS = -std=c++20 -I. -I./mock -pthread
+TARGETS = test_superglide
+
+all: $(TARGETS)
+
+test_superglide: test_superglide.cpp ../SuperglideLogic.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+clean:
+	rm -f $(TARGETS)
+
+test: all
+	./test_superglide
+>>>>>>> origin/jules-13692354564841379828-b7768257

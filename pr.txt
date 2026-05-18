@@ -1,0 +1,5 @@
+🧪 [testing] Comprehensive tests for Superglide thread sequence execution
+
+🎯 **What:** The testing gap in `SuperglideLogic.cpp` is addressed. Prior to this, the core jump->sleep->crouch injection sequence was completely unverified.
+📊 **Coverage:** Mocked `QueryPerformanceCounter` and threading APIs (`WaitForSingleObject`, `SetEvent`, `CreateThread`) were implemented. The test covers thread start/stop behaviors and simulates the core run loop iterations, verifying exact input injections (`VK_SPACE`, `VK_LCONTROL`) as well as ensuring timing operations loop properly.
+✨ **Result:** A fully isolated C++ unit test exists `tests/test_superglide.cpp` providing automated validation of Superglide execution sequence behavior without needing real Windows APIs or hardware timing.
