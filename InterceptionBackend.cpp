@@ -230,7 +230,7 @@ bool InterceptionBackend::ResolveApi() noexcept {
 
   auto tryLoad = [this, &exeDir](const wchar_t *dllName) -> bool {
     std::wstring fullPath = exeDir + dllName;
-    interceptionLib_ = LoadLibraryW(fullPath.c_str());
+    interceptionLib_ = LoadLibraryExW(fullPath.c_str(), NULL, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (!interceptionLib_) {
       return false;
     }
