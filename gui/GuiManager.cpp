@@ -496,11 +496,7 @@ void GuiManager::RenderConfigContent() {
         //    active. We LoadLibrary temporarily; drivers loaded in both the
         //    target app and here share the same user-mode proxy so this is
         //    safe.
-<<<<<<< HEAD
-        HMODULE lib = LoadLibraryExW(dllPath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-=======
-        HMODULE lib = LoadLibraryExW(dllPath.c_str(), NULL, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
->>>>>>> origin/fix/dll-hijacking-loadlibrary-11914725001324714657
+        HMODULE lib = LoadLibraryW(dllPath.c_str());
         if (!lib) {
           s_icStatus.state = InterceptionStatus::State::DriverInactive;
         } else {
