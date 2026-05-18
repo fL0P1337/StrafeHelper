@@ -1,10 +1,14 @@
-⚡ [Performance] High-Resolution Wait in Turbo Loop
+🧪 Add tests for VirtualKeyToScanCode
 
-**💡 What:**
-The `Sleep(duration)` call in the `RunTurboLoop` function (in `TurboLogic.cpp`) was replaced with a high-resolution hybrid wait using `QueryPerformanceCounter` and a busy-spin loop for the final fraction of a millisecond. We also initialize the loop with `timeBeginPeriod(1)` to ensure optimal system timer resolution.
+🎯 What:
+Added missing unit tests for `VirtualKeyToScanCode` located in `Utils.cpp`. The codebase was missing automated validation for ensuring virtual keys map to the correct scan codes according to the mocked Windows API behavior.
 
-**🎯 Why:**
-The `Sleep()` function in Windows is fundamentally inaccurate and can oversleep significantly, even with `timeBeginPeriod(1)`. This results in poor precision for automated key repeat rates, especially for small intervals like 5-10ms. A high-resolution wait loop allows for exact timing of the input sequences (Turbo Loot and Turbo Jump), preventing drift or missed frames while maintaining the interruptibility required to stop the sequence instantly.
+📊 Coverage:
+The new tests cover:
+- Standard alphanumeric keys (e.g. `'A'` maps to `0x1E`)
+- Control and system keys (e.g. `VK_SPACE` maps to `0x39`, `VK_ESCAPE` maps to `0x01`, `VK_RETURN` maps to `0x1C`)
+- Extended keys handling (verifying that the extended bit is appropriately dropped by the bitmask logic, e.g. `VK_RCONTROL` returning `0x1D`)
+- Unmapped/invalid keys returning `0x00`.
 
-**📊 Measured Improvement:**
-While a formal benchmark runner wasn't available in the environment, theoretically, standard `Sleep()` with `timeBeginPeriod(1)` has an accuracy of about ±1.0 to ±2.0 ms. The hybrid spin-wait approach achieves an accuracy of <10 µs by spinning for the remaining time under a 0.5 ms threshold (`spinThreshold`). This ensures the turbo action delay is effectively perfectly accurate to the requested configuration while continuing to efficiently yield CPU time during the longer wait periods.
+✨ Result:
+Improved test coverage and reliability for `Utils.cpp`. Since `VirtualKeyToScanCode` acts as a crucial bridge between input representations, verifying its behavior guarantees that downstream functionality (like event injection) receives the correct key codes. This provides a safety net allowing confident refactoring.
