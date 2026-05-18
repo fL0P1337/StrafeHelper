@@ -1,6 +1,7 @@
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 CXX = g++
 <<<<<<< HEAD
 CXXFLAGS = -std=c++20 -I../ -I./mock -g -Wall -fpermissive -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
@@ -89,3 +90,23 @@ clean:
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 >>>>>>> origin/jules-12324778450551743726-20657356
+=======
+CXX = g++
+CXXFLAGS = -std=c++20 -Wall -Wextra -I. -I.. -Imock
+
+SRCS = test_utils.cpp ../Utils.cpp ../Config.cpp mock/windows_mock.cpp ../Logger.cpp
+OBJS = $(SRCS:.cpp=.o)
+
+TARGET = test_utils
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+clean:
+	rm -f $(OBJS) $(TARGET)
+>>>>>>> origin/jules-tests-virtualkeytoscan-7065570391822414374

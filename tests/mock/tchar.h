@@ -2,6 +2,7 @@
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 typedef char TCHAR;
 <<<<<<< HEAD
 #define _T(x) x
@@ -23,3 +24,8 @@ typedef char TCHAR;
 
 typedef char TCHAR;
 >>>>>>> origin/jules-12324778450551743726-20657356
+=======
+#define TCHAR char
+#define _T(x) x
+#define TEXT(x) x
+>>>>>>> origin/jules-tests-virtualkeytoscan-7065570391822414374
