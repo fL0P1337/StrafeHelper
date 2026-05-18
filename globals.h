@@ -3,9 +3,9 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <atomic>
-#include <map>   // <-- Add
+#include <map>
 #include <mutex> // Or keep windows.h for CRITICAL_SECTION
-#include <vector> // <-- Add
+#include <vector>
 #include <windows.h>
 #include <shellapi.h>
 
