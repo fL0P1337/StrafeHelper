@@ -7,11 +7,16 @@
 #include <iostream>
 #include <tchar.h>
 <<<<<<< HEAD
+<<<<<<< HEAD
 #include <vector>
 #include <windows.h> // <-- Add
 =======
 #include <windows.h>
 >>>>>>> origin/jules-remove-redundant-include-comments-5874034639082053608
+=======
+#include <windows.h>
+
+>>>>>>> origin/jules-3575531840812500691-7007c21d
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
