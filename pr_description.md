@@ -1,10 +1,11 @@
-⚡ [Performance] High-Resolution Wait in Turbo Loop
+🧪 [testing improvement] Add unit tests for StartSuperglideThread
 
-**💡 What:**
-The `Sleep(duration)` call in the `RunTurboLoop` function (in `TurboLogic.cpp`) was replaced with a high-resolution hybrid wait using `QueryPerformanceCounter` and a busy-spin loop for the final fraction of a millisecond. We also initialize the loop with `timeBeginPeriod(1)` to ensure optimal system timer resolution.
+🎯 **What:** The testing gap addressed
+This PR introduces unit tests to verify the behavior of `StartSuperglideThread` in `SuperglideLogic.cpp`. This function is responsible for initializing and launching the background thread handling Superglide execution in the application. Before this PR, this functionality was completely untested, running the risk of unhandled failure scenarios causing instability.
 
-**🎯 Why:**
-The `Sleep()` function in Windows is fundamentally inaccurate and can oversleep significantly, even with `timeBeginPeriod(1)`. This results in poor precision for automated key repeat rates, especially for small intervals like 5-10ms. A high-resolution wait loop allows for exact timing of the input sequences (Turbo Loot and Turbo Jump), preventing drift or missed frames while maintaining the interruptibility required to stop the sequence instantly.
+📊 **Coverage:** What scenarios are now tested
+- **Happy Path:** Tests that `StartSuperglideThread` successfully creates the thread and sets the thread handle `Globals::g_hSuperglideThread` as expected when Windows API `CreateThread` succeeds.
+- **Failure Condition:** Tests the edge case where `CreateThread` fails (e.g. out of resources) and returns NULL. Verifies that the function appropriately returns `false`, logs an error using `LogError`, and keeps the `Globals::g_hSuperglideThread` handle as NULL.
 
-**📊 Measured Improvement:**
-While a formal benchmark runner wasn't available in the environment, theoretically, standard `Sleep()` with `timeBeginPeriod(1)` has an accuracy of about ±1.0 to ±2.0 ms. The hybrid spin-wait approach achieves an accuracy of <10 µs by spinning for the remaining time under a 0.5 ms threshold (`spinThreshold`). This ensures the turbo action delay is effectively perfectly accurate to the requested configuration while continuing to efficiently yield CPU time during the longer wait periods.
+✨ **Result:** The improvement in test coverage
+By adding these tests, we provide a safety net for `SuperglideLogic.cpp`, explicitly guaranteeing that background thread initialization is both robust against API failures and functions appropriately in valid scenarios. This adds much-needed automated test coverage and confidence for core behavior. The test framework was also expanded with mock Windows APIs and mock Config structures for more isolated component testing moving forward.
