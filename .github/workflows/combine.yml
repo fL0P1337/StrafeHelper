@@ -26,12 +26,12 @@ jobs:
 
           for branch in $prs; do
             git fetch origin $branch
-            git merge --squash origin/$branch || true
+            if ! git merge origin/$branch --no-edit; then
+              git rm --ignore-unmatch pr_description.md
+              git add -A
+              git commit -m "Merge $branch (resolved pr_description.md conflict)"
+            fi
           done
-
-          git rm --ignore-unmatch pr_description.md
-          git add -A
-          git commit -m "Combined PRs with label: $LABEL"
 
       - name: Push changes
         uses: ad-m/github-push-action@master
@@ -40,11 +40,11 @@ jobs:
           branch: ${{ github.event.ref }}
 
       - name: Create pull request
-        uses: peter-evans/create-pull-request@v6
+        uses: devops-infra/action-pull-request@v0.4.1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           title: "[${{ github.event.ref }}] combined!"
           body: ""
-          branch: ${{ github.event.ref }}
-          base: master
-          labels: "bundle"
+          source_branch: ${{ github.event.ref }}
+          target_branch: master
+          label: "bundle"
