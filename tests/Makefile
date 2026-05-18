@@ -1,5 +1,6 @@
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 CXX = g++
 <<<<<<< HEAD
 CXXFLAGS = -std=c++20 -I../ -I./mock -g -Wall -fpermissive -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
@@ -71,3 +72,20 @@ clean:
 >>>>>>> origin/add-config-tests-11195440746030750129
 =======
 >>>>>>> origin/add-superglide-tests-17935704524920767383
+=======
+CXX ?= g++
+CXXFLAGS = -std=c++20 -I../ -I./mock -g -O0
+
+SRCS = ConfigTest.cpp ./mock/Utils.cpp ./mock/Logger.cpp
+OBJS = $(SRCS:.cpp=.o)
+
+test: $(OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+	./test
+
+clean:
+	rm -f $(OBJS) test
+
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+>>>>>>> origin/jules-12324778450551743726-20657356

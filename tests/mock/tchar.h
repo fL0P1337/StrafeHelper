@@ -1,6 +1,7 @@
 #pragma once
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 typedef char TCHAR;
 <<<<<<< HEAD
 #define _T(x) x
@@ -18,3 +19,7 @@ typedef char TCHAR;
 typedef char TCHAR;
 #define _T(x) x
 >>>>>>> origin/add-superglide-tests-17935704524920767383
+=======
+
+typedef char TCHAR;
+>>>>>>> origin/jules-12324778450551743726-20657356
