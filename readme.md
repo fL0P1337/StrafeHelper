@@ -1,6 +1,6 @@
 # StrafeHelper
 
-![StrafeHelper Showcase 1](showcase_1.jpg)
+![StrafeHelper Showcase 1](assets/showcase_1.jpg)
 
 ## Motivation
 
@@ -139,8 +139,8 @@ $msbuild = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\Community\M
 ## Previews
 
 <div align="center">
-  <img src="showcase_2.jpg" alt="Config Tab" width="45%" />
-  <img src="showcase_3.jpg" alt="State Monitor" width="45%" />
+  <img src="assets/showcase_2.jpg" alt="Config Tab" width="45%" />
+  <img src="assets/showcase_3.jpg" alt="State Monitor" width="45%" />
 </div>
 
 ---
