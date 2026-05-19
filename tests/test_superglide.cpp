@@ -5,7 +5,7 @@
 #include <mutex>
 #include <chrono>
 #include "../SuperglideLogic.h"
-#include "../globals.h"
+#include "../Globals.h"
 #include "../Config.h"
 
 // Reference external mock state from stub_globals.cpp
