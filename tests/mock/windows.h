@@ -213,3 +213,22 @@ inline void InitializeCriticalSection(CRITICAL_SECTION* cs) {}
 inline void DeleteCriticalSection(CRITICAL_SECTION* cs) {}
 inline void EnterCriticalSection(CRITICAL_SECTION* cs) {}
 inline void LeaveCriticalSection(CRITICAL_SECTION* cs) {}
+
+// Code page constants
+#ifndef CP_ACP
+#define CP_ACP 0
+#endif
+
+// WideCharToMultiByte stub — returns empty narrow path in test context.
+// GetExecutableDirectory() returns a well-known mock path; the test stub
+// for GetExecutableDirectory() (in stub_utils.cpp) already returns L""
+// so GetConfigFilePath() will fall back to CONFIG_FILE_NAME anyway.
+inline int WideCharToMultiByte(unsigned int /*CodePage*/, DWORD /*dwFlags*/,
+                               const wchar_t* /*lpWideCharStr*/, int /*cchWideChar*/,
+                               char* lpMultiByteStr, int cbMultiByte,
+                               const char* /*lpDefaultChar*/, int* /*lpUsedDefaultChar*/) {
+    if (lpMultiByteStr && cbMultiByte > 0) {
+        lpMultiByteStr[0] = '\0';
+    }
+    return 1; // Indicate success with 1-char (null terminator) result
+}

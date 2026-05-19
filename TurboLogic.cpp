@@ -5,12 +5,11 @@
 #include "Globals.h"
 #include "Application.h"
 #include "KeybindManager.h"
+#include "Logger.h"
 #include "Utils.h"
 #include <atomic>
 #include <condition_variable>
-#include <iostream>
 #include <mutex>
-#include <random>
 #include <thread>
 #include <timeapi.h>
 #include <windows.h>
@@ -29,6 +28,9 @@ std::mutex g_turboJumpCvMtx;
 std::condition_variable g_turboJumpCv;
 bool g_turboJumpCvFlag = false;
 
+// -----------------------------------------------------------------------
+// Generic turbo loop — handles both TurboLoot and TurboJump.
+// -----------------------------------------------------------------------
 void RunTurboLoop(std::stop_token stopToken,
                   std::mutex &cvMtx, std::condition_variable &cv, bool &cvFlag,
                   std::atomic<bool> &configEnable, std::atomic<int> &configKey,
@@ -78,12 +80,26 @@ void RunTurboLoop(std::stop_token stopToken,
       }
     }
 
-    // Send key-up
     InjectKey(key, false);
   }
 
   timeEndPeriod(1);
-  std::cout << threadName << " thread exiting." << std::endl;
+  Logger::GetInstance().Log(std::string(threadName) + " thread exiting.");
+}
+
+// -----------------------------------------------------------------------
+// Generic stop helper — avoids copy-paste across all worker threads.
+// -----------------------------------------------------------------------
+template <typename TriggerFn>
+void StopWorkerThread(std::jthread &thread, TriggerFn trigger,
+                      const char *name) {
+  if (thread.joinable()) {
+    Logger::GetInstance().Log(std::string("Requesting ") + name + " thread stop...");
+    thread.request_stop();
+    trigger();
+    thread.join();
+    Logger::GetInstance().Log(std::string(name) + " thread stopped.");
+  }
 }
 
 void TurboLootThreadFunc(std::stop_token stopToken) {
@@ -107,35 +123,23 @@ void TurboJumpThreadFunc(std::stop_token stopToken) {
 bool StartTurboLootThread() {
   StopTurboLootThread();
   g_turboLootThread = std::jthread(TurboLootThreadFunc);
-  std::cout << "TurboLoot thread started." << std::endl;
+  Logger::GetInstance().Log("TurboLoot thread started.");
   return true;
 }
 
 void StopTurboLootThread() {
-  if (g_turboLootThread.joinable()) {
-    std::cout << "Requesting TurboLoot thread stop..." << std::endl;
-    g_turboLootThread.request_stop();
-    TriggerTurboLoot();
-    g_turboLootThread.join();
-    std::cout << "TurboLoot thread stopped." << std::endl;
-  }
+  StopWorkerThread(g_turboLootThread, TriggerTurboLoot, "TurboLoot");
 }
 
 bool StartTurboJumpThread() {
   StopTurboJumpThread();
   g_turboJumpThread = std::jthread(TurboJumpThreadFunc);
-  std::cout << "TurboJump thread started." << std::endl;
+  Logger::GetInstance().Log("TurboJump thread started.");
   return true;
 }
 
 void StopTurboJumpThread() {
-  if (g_turboJumpThread.joinable()) {
-    std::cout << "Requesting TurboJump thread stop..." << std::endl;
-    g_turboJumpThread.request_stop();
-    TriggerTurboJump();
-    g_turboJumpThread.join();
-    std::cout << "TurboJump thread stopped." << std::endl;
-  }
+  StopWorkerThread(g_turboJumpThread, TriggerTurboJump, "TurboJump");
 }
 
 void TriggerTurboLoot() noexcept {

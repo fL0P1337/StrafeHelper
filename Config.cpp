@@ -1,14 +1,15 @@
 // Config.cpp
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #include "Config.h"
 #include "Logger.h"
-#include <unordered_map>
-#include <string_view>
 #include "Utils.h"
 #include <cctype>
 #include <fstream>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
-#include <windows.h> // For VkKeyScanA
 
 namespace Config {
 namespace {
@@ -118,13 +119,64 @@ std::string FormatConfigKey(int vk) {
 }
 } // namespace
 
+// --- Config key name constants — single source of truth used by Load+Save ---
+namespace Keys {
+  constexpr const char* kSpamDelayMs          = "spam_delay_ms";
+  constexpr const char* kSpamKeyDownDuration   = "spam_key_down_duration";
+  constexpr const char* kIsLocked              = "is_locked";
+  constexpr const char* kEnableSpam            = "enable_spam";
+  constexpr const char* kEnableSnapTap         = "enable_snaptap";
+  constexpr const char* kKeySpamTrigger        = "key_spam_trigger";
+  constexpr const char* kKeySpamTriggerMode    = "key_spam_trigger_mode";
+  constexpr const char* kEnableTurboLoot       = "enable_turbo_loot";
+  constexpr const char* kTurboLootKey          = "turbo_loot_key";
+  constexpr const char* kTurboLootDelay        = "turbo_loot_delay";
+  constexpr const char* kTurboLootDuration     = "turbo_loot_duration";
+  constexpr const char* kTurboLootMode         = "turbo_loot_mode";
+  constexpr const char* kEnableTurboJump       = "enable_turbo_jump";
+  constexpr const char* kTurboJumpKey          = "turbo_jump_key";
+  constexpr const char* kTurboJumpDelay        = "turbo_jump_delay";
+  constexpr const char* kTurboJumpDuration     = "turbo_jump_duration";
+  constexpr const char* kTurboJumpMode         = "turbo_jump_mode";
+  constexpr const char* kInputBackend          = "input_backend";
+  constexpr const char* kEnableSuperglide      = "enable_superglide";
+  constexpr const char* kSuperglideBind        = "superglide_bind";
+  constexpr const char* kTargetFps             = "target_fps";
+  constexpr const char* kSuperglideMode        = "superglide_mode";
+  constexpr const char* kEnableJitter          = "enable_jitter";
+  constexpr const char* kJitterMs              = "jitter_ms";
+} // namespace Keys
+
 // --- Definitions of extern variables from Config.h ---
 const char APP_NAME[] = "StrafeHelper";
-const char VERSION[] = "1.2_modular"; // Updated version
+const char VERSION[] = "1.2.0";
 const char CONFIG_FILE_NAME[] = "config.cfg";
 
 const TCHAR WINDOW_CLASS_NAME[] = TEXT("StrafeHelperWindowClass");
 const TCHAR WINDOW_TITLE[] = TEXT("StrafeHelper Hidden Window");
+
+// Returns the full path to the config file, located next to the executable.
+static std::string GetConfigFilePath() {
+  const std::wstring dir = GetExecutableDirectory();
+  if (dir.empty()) {
+    return CONFIG_FILE_NAME; // Fallback to CWD
+  }
+#ifdef _WIN32
+  // Convert the wide-char directory path to a narrow string.
+  const int needed = WideCharToMultiByte(CP_ACP, 0, dir.c_str(), -1,
+                                         nullptr, 0, nullptr, nullptr);
+  if (needed <= 0) {
+    return CONFIG_FILE_NAME;
+  }
+  std::string narrowDir(static_cast<size_t>(needed - 1), '\0');
+  WideCharToMultiByte(CP_ACP, 0, dir.c_str(), -1,
+                      &narrowDir[0], needed, nullptr, nullptr);
+  return narrowDir + CONFIG_FILE_NAME;
+#else
+  // Non-Windows fallback: use CWD
+  return CONFIG_FILE_NAME;
+#endif
+}
 
 // Initialize atomics with defaults
 std::atomic<int> SpamDelayMs{10};
@@ -168,9 +220,10 @@ std::atomic<int> JitterMs{3};
 
 // --- Implementation of LoadConfig ---
 void LoadConfig() {
-  std::ifstream configFile(CONFIG_FILE_NAME);
+  const std::string configPath = GetConfigFilePath();
+  std::ifstream configFile(configPath);
   if (!configFile.is_open()) {
-    std::string logMsg = "Config file '" + std::string(CONFIG_FILE_NAME) +
+    std::string logMsg = "Config file '" + configPath +
                          "' not found. Using defaults.\n";
     logMsg += " Defaults: Delay=" + std::to_string(SpamDelayMs.load()) +
               "ms, Duration=" + std::to_string(SpamKeyDownDurationMs.load()) +
@@ -181,8 +234,7 @@ void LoadConfig() {
     return;
   }
 
-  Logger::GetInstance().Log("Loading configuration from " +
-                            std::string(CONFIG_FILE_NAME) + "...");
+  Logger::GetInstance().Log("Loading configuration from " + configPath + "...");
   std::string line;
   int lineNumber = 0;
   bool hasEnableSpam = false;
@@ -216,85 +268,80 @@ void LoadConfig() {
       value = value.substr(value_first);
 
     try {
-      if (key == "SPAM_DELAY_MS")
+      // Legacy key migration
+      if (key == "isWASDStrafingEnabled") {
+        legacyEnableSpam = (value == "true" || value == "1");
+      }
+      // Legacy SCREAMING_SNAKE keys (kept for backward compat)
+      else if (key == "SPAM_DELAY_MS" || key == Keys::kSpamDelayMs)
         SpamDelayMs = std::stoi(value);
-      else if (key == "SPAM_KEY_DOWN_DURATION")
+      else if (key == "SPAM_KEY_DOWN_DURATION" || key == Keys::kSpamKeyDownDuration)
         SpamKeyDownDurationMs = std::stoi(value);
-      else if (key == "isLocked")
+      else if (key == "isLocked" || key == Keys::kIsLocked)
         IsLocked = (value == "true" || value == "1");
-      else if (key == "enable_spam") {
+      else if (key == Keys::kEnableSpam) {
         EnableSpam = (value == "true" || value == "1");
         hasEnableSpam = true;
-      } else if (key == "isWASDStrafingEnabled")
-        legacyEnableSpam = (value == "true" || value == "1");
-      else if (key == "enable_snaptap")
-        EnableSnapTap = (value == "true" || value == "1");
-      else if (key == "KEY_SPAM_TRIGGER") {
-        if (!value.empty()) {
-          KeySpamTrigger = ParseKeyValue(
-              value, KeySpamTrigger.load(std::memory_order_relaxed));
-        }
       }
-      else if (key == "key_spam_trigger_mode") {
+      else if (key == Keys::kEnableSnapTap)
+        EnableSnapTap = (value == "true" || value == "1");
+      else if (key == "KEY_SPAM_TRIGGER" || key == Keys::kKeySpamTrigger) {
+        if (!value.empty())
+          KeySpamTrigger = ParseKeyValue(value, KeySpamTrigger.load(std::memory_order_relaxed));
+      }
+      else if (key == Keys::kKeySpamTriggerMode) {
         int mode = std::stoi(value);
         KeySpamTriggerMode = (mode == 1) ? KeybindMode::Toggle : KeybindMode::Hold;
       }
       // Turbo Loot
-      else if (key == "enable_turbo_loot")
+      else if (key == Keys::kEnableTurboLoot)
         EnableTurboLoot = (value == "true" || value == "1");
-      else if (key == "turbo_loot_key") {
-        TurboLootKey =
-            ParseKeyValue(value, TurboLootKey.load(std::memory_order_relaxed));
-      }
-      else if (key == "turbo_loot_delay")
+      else if (key == Keys::kTurboLootKey)
+        TurboLootKey = ParseKeyValue(value, TurboLootKey.load(std::memory_order_relaxed));
+      else if (key == Keys::kTurboLootDelay)
         TurboLootDelayMs = std::stoi(value);
-      else if (key == "turbo_loot_duration")
+      else if (key == Keys::kTurboLootDuration)
         TurboLootDurationMs = std::stoi(value);
-      else if (key == "turbo_loot_mode") {
+      else if (key == Keys::kTurboLootMode) {
         int mode = std::stoi(value);
         TurboLootMode = (mode == 1) ? KeybindMode::Toggle : KeybindMode::Hold;
       }
       // Turbo Jump
-      else if (key == "enable_turbo_jump")
+      else if (key == Keys::kEnableTurboJump)
         EnableTurboJump = (value == "true" || value == "1");
-      else if (key == "turbo_jump_key") {
-        TurboJumpKey =
-            ParseKeyValue(value, TurboJumpKey.load(std::memory_order_relaxed));
-      }
-      else if (key == "turbo_jump_delay")
+      else if (key == Keys::kTurboJumpKey)
+        TurboJumpKey = ParseKeyValue(value, TurboJumpKey.load(std::memory_order_relaxed));
+      else if (key == Keys::kTurboJumpDelay)
         TurboJumpDelayMs = std::stoi(value);
-      else if (key == "turbo_jump_duration")
+      else if (key == Keys::kTurboJumpDuration)
         TurboJumpDurationMs = std::stoi(value);
-      else if (key == "turbo_jump_mode") {
+      else if (key == Keys::kTurboJumpMode) {
         int mode = std::stoi(value);
         TurboJumpMode = (mode == 1) ? KeybindMode::Toggle : KeybindMode::Hold;
       }
-      else if (key == "input_backend") {
+      else if (key == Keys::kInputBackend) {
         int v = std::stoi(value);
-        // Clamp to valid range; unknown values default to KbdHook
         SelectedBackend = (v == 1) ? 1 : 0;
       }
       // Superglide
-      else if (key == "enable_superglide")
+      else if (key == Keys::kEnableSuperglide)
         EnableSuperglide = (value == "true" || value == "1");
-      else if (key == "superglide_bind") {
-        SuperglideBind = ParseKeyValue(
-            value, SuperglideBind.load(std::memory_order_relaxed));
-      }
-      else if (key == "target_fps") {
+      else if (key == Keys::kSuperglideBind)
+        SuperglideBind = ParseKeyValue(value, SuperglideBind.load(std::memory_order_relaxed));
+      else if (key == Keys::kTargetFps) {
         double fps = std::stod(value);
         if (fps > 0.0)
           TargetFPS.store(fps);
       }
-      else if (key == "superglide_mode") {
+      else if (key == Keys::kSuperglideMode) {
         // Legacy key retained for compatibility; superglide is always HOLD.
         (void)std::stoi(value);
         SuperglideMode = KeybindMode::Hold;
       }
       // Jitter
-      else if (key == "enable_jitter")
+      else if (key == Keys::kEnableJitter)
         EnableJitter = (value == "true" || value == "1");
-      else if (key == "jitter_ms") {
+      else if (key == Keys::kJitterMs) {
         int v = std::stoi(value);
         if (v >= 0)
           JitterMs = v;
@@ -348,29 +395,12 @@ void LoadConfig() {
 }
 
 void SaveConfig() {
-  const std::string spamDelay = std::to_string(SpamDelayMs.load());
-  const std::string spamDuration = std::to_string(SpamKeyDownDurationMs.load());
-  const std::string isLockedStr = IsLocked.load() ? "true" : "false";
-  const std::string enableSpamStr = EnableSpam.load() ? "true" : "false";
-  const std::string snapTapStr = EnableSnapTap.load() ? "true" : "false";
-  const std::string triggerStr = FormatConfigKey(KeySpamTrigger.load());
-  const std::string turboLootStr = EnableTurboLoot.load() ? "true" : "false";
-  const std::string turboLootKeyStr = FormatConfigKey(TurboLootKey.load());
-  const std::string turboLootDelayStr = std::to_string(TurboLootDelayMs.load());
-  const std::string turboLootDurStr =
-      std::to_string(TurboLootDurationMs.load());
-  const std::string turboJumpStr = EnableTurboJump.load() ? "true" : "false";
-  const std::string turboJumpKeyStr = FormatConfigKey(TurboJumpKey.load());
-  const std::string turboJumpDelayStr = std::to_string(TurboJumpDelayMs.load());
-  const std::string turboJumpDurStr =
-      std::to_string(TurboJumpDurationMs.load());
-  const std::string superglideBindStr = FormatConfigKey(SuperglideBind.load());
-
   // Update-in-place: preserve unknown keys/comments, replace known keys, append
   // missing ones.
+  const std::string configPath = GetConfigFilePath();
   std::vector<std::string> lines;
   {
-    std::ifstream in(CONFIG_FILE_NAME);
+    std::ifstream in(configPath);
     std::string line;
     while (std::getline(in, line)) {
       lines.push_back(line);
@@ -383,31 +413,30 @@ void SaveConfig() {
     bool found;
   };
   Entry entries[] = {
-      {"SPAM_DELAY_MS", spamDelay, false},
-      {"SPAM_KEY_DOWN_DURATION", spamDuration, false},
-      {"isLocked", isLockedStr, false},
-      {"enable_spam", enableSpamStr, false},
-      {"enable_snaptap", snapTapStr, false},
-      {"KEY_SPAM_TRIGGER", triggerStr, false},
-      {"key_spam_trigger_mode", std::to_string(static_cast<int>(KeySpamTriggerMode.load())), false},
-      {"enable_turbo_loot", turboLootStr, false},
-      {"turbo_loot_key", turboLootKeyStr, false},
-      {"turbo_loot_delay", turboLootDelayStr, false},
-      {"turbo_loot_duration", turboLootDurStr, false},
-      {"turbo_loot_mode", std::to_string(static_cast<int>(TurboLootMode.load())), false},
-      {"enable_turbo_jump", turboJumpStr, false},
-      {"turbo_jump_key", turboJumpKeyStr, false},
-      {"turbo_jump_delay", turboJumpDelayStr, false},
-      {"turbo_jump_duration", turboJumpDurStr, false},
-      {"turbo_jump_mode", std::to_string(static_cast<int>(TurboJumpMode.load())), false},
-      {"input_backend", std::to_string(SelectedBackend.load()), false},
-      {"enable_superglide", EnableSuperglide.load() ? "true" : "false", false},
-      {"superglide_bind", superglideBindStr, false},
-      {"target_fps", std::to_string(TargetFPS.load()), false},
-      {"superglide_mode", std::to_string(static_cast<int>(KeybindMode::Hold)),
-       false},
-      {"enable_jitter", EnableJitter.load() ? "true" : "false", false},
-      {"jitter_ms", std::to_string(JitterMs.load()), false},
+      {Keys::kSpamDelayMs,       std::to_string(SpamDelayMs.load()), false},
+      {Keys::kSpamKeyDownDuration, std::to_string(SpamKeyDownDurationMs.load()), false},
+      {Keys::kIsLocked,          IsLocked.load() ? "true" : "false", false},
+      {Keys::kEnableSpam,        EnableSpam.load() ? "true" : "false", false},
+      {Keys::kEnableSnapTap,     EnableSnapTap.load() ? "true" : "false", false},
+      {Keys::kKeySpamTrigger,    FormatConfigKey(KeySpamTrigger.load()), false},
+      {Keys::kKeySpamTriggerMode, std::to_string(static_cast<int>(KeySpamTriggerMode.load())), false},
+      {Keys::kEnableTurboLoot,   EnableTurboLoot.load() ? "true" : "false", false},
+      {Keys::kTurboLootKey,      FormatConfigKey(TurboLootKey.load()), false},
+      {Keys::kTurboLootDelay,    std::to_string(TurboLootDelayMs.load()), false},
+      {Keys::kTurboLootDuration, std::to_string(TurboLootDurationMs.load()), false},
+      {Keys::kTurboLootMode,     std::to_string(static_cast<int>(TurboLootMode.load())), false},
+      {Keys::kEnableTurboJump,   EnableTurboJump.load() ? "true" : "false", false},
+      {Keys::kTurboJumpKey,      FormatConfigKey(TurboJumpKey.load()), false},
+      {Keys::kTurboJumpDelay,    std::to_string(TurboJumpDelayMs.load()), false},
+      {Keys::kTurboJumpDuration, std::to_string(TurboJumpDurationMs.load()), false},
+      {Keys::kTurboJumpMode,     std::to_string(static_cast<int>(TurboJumpMode.load())), false},
+      {Keys::kInputBackend,      std::to_string(SelectedBackend.load()), false},
+      {Keys::kEnableSuperglide,  EnableSuperglide.load() ? "true" : "false", false},
+      {Keys::kSuperglideBind,    FormatConfigKey(SuperglideBind.load()), false},
+      {Keys::kTargetFps,         std::to_string(TargetFPS.load()), false},
+      {Keys::kSuperglideMode,    std::to_string(static_cast<int>(KeybindMode::Hold)), false},
+      {Keys::kEnableJitter,      EnableJitter.load() ? "true" : "false", false},
+      {Keys::kJitterMs,          std::to_string(JitterMs.load()), false},
   };
 
   auto trim = [](std::string &s) {
@@ -476,10 +505,10 @@ void SaveConfig() {
     }
   }
 
-  std::ofstream out(CONFIG_FILE_NAME, std::ios::trunc);
+  std::ofstream out(configPath, std::ios::trunc);
   if (!out.is_open()) {
     Logger::GetInstance().Log("Warning: Failed to open config file '" +
-                              std::string(CONFIG_FILE_NAME) + "' for writing.");
+                              configPath + "' for writing.");
     return;
   }
 
@@ -490,8 +519,7 @@ void SaveConfig() {
   }
   out.close();
 
-  Logger::GetInstance().Log("Configuration saved to " +
-                            std::string(CONFIG_FILE_NAME));
+  Logger::GetInstance().Log("Configuration saved to " + configPath);
 }
 
 } // namespace Config

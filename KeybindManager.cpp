@@ -1,4 +1,5 @@
 // KeybindManager.cpp
+// Centralized keybind mode handling with edge detection for toggle support.
 #include "KeybindManager.h"
 #include "Config.h"
 #include "Globals.h"
@@ -68,54 +69,66 @@ KeyAction ProcessKeyEvent(int vkCode, bool isKeyDown, int configKey,
   return action;
 }
 
-bool ProcessSpamTrigger(int vkCode, bool isKeyDown) {
-  const int triggerKey = Config::KeySpamTrigger.load(std::memory_order_relaxed);
-  if (vkCode != triggerKey) {
-    // Return current state if not the trigger key
-    return IsSpamTriggerActive();
+// -----------------------------------------------------------------------
+// Generic helpers — eliminate per-feature copy-paste
+// -----------------------------------------------------------------------
+
+// Returns whether a feature with the given config key+mode is currently active
+// based on physical key hold state or toggle state.
+static bool IsFeatureActive(std::atomic<int> &configKey,
+                            std::atomic<Config::KeybindMode> &mode,
+                            std::atomic<bool> &toggleActive) {
+  if (mode.load(std::memory_order_relaxed) == Config::KeybindMode::Hold) {
+    const int vk = configKey.load(std::memory_order_relaxed);
+    if (vk >= 0 && vk < 256)
+      return Globals::g_KeyInfo[vk].physicalKeyDown.load(std::memory_order_relaxed);
+    return false;
+  }
+  return toggleActive.load(std::memory_order_relaxed);
+}
+
+// Processes a key event for a feature and returns whether the feature should
+// be active after this event.
+static bool ProcessFeatureKeyEvent(int vkCode, bool isKeyDown,
+                                   std::atomic<int> &configKey,
+                                   std::atomic<Config::KeybindMode> &mode,
+                                   std::atomic<bool> &toggleActive) {
+  const int key = configKey.load(std::memory_order_relaxed);
+  if (vkCode != key) {
+    return IsFeatureActive(configKey, mode, toggleActive);
   }
 
-  auto action = ProcessKeyEvent(vkCode, isKeyDown, triggerKey,
+  auto action = ProcessKeyEvent(vkCode, isKeyDown, key, mode, toggleActive);
+
+  if (mode.load(std::memory_order_relaxed) == Config::KeybindMode::Hold) {
+    return action.isKeyDown;
+  }
+  return toggleActive.load(std::memory_order_relaxed);
+}
+
+// -----------------------------------------------------------------------
+// Feature-specific processors (thin wrappers over the generic helpers)
+// -----------------------------------------------------------------------
+
+bool ProcessSpamTrigger(int vkCode, bool isKeyDown) {
+  return ProcessFeatureKeyEvent(vkCode, isKeyDown,
+                                Config::KeySpamTrigger,
                                 Config::KeySpamTriggerMode,
                                 Config::KeySpamTriggerToggleActive);
-
-  if (Config::KeySpamTriggerMode.load() == Config::KeybindMode::Hold) {
-    return action.isKeyDown;
-  } else {
-    return Config::KeySpamTriggerToggleActive.load();
-  }
 }
 
 bool ProcessTurboLoot(int vkCode, bool isKeyDown) {
-  const int lootKey = Config::TurboLootKey.load(std::memory_order_relaxed);
-  if (vkCode != lootKey) {
-    return IsTurboLootActive();
-  }
-
-  auto action = ProcessKeyEvent(vkCode, isKeyDown, lootKey, Config::TurboLootMode,
+  return ProcessFeatureKeyEvent(vkCode, isKeyDown,
+                                Config::TurboLootKey,
+                                Config::TurboLootMode,
                                 Config::TurboLootToggleActive);
-
-  if (Config::TurboLootMode.load() == Config::KeybindMode::Hold) {
-    return action.isKeyDown;
-  } else {
-    return Config::TurboLootToggleActive.load();
-  }
 }
 
 bool ProcessTurboJump(int vkCode, bool isKeyDown) {
-  const int jumpKey = Config::TurboJumpKey.load(std::memory_order_relaxed);
-  if (vkCode != jumpKey) {
-    return IsTurboJumpActive();
-  }
-
-  auto action = ProcessKeyEvent(vkCode, isKeyDown, jumpKey, Config::TurboJumpMode,
+  return ProcessFeatureKeyEvent(vkCode, isKeyDown,
+                                Config::TurboJumpKey,
+                                Config::TurboJumpMode,
                                 Config::TurboJumpToggleActive);
-
-  if (Config::TurboJumpMode.load() == Config::KeybindMode::Hold) {
-    return action.isKeyDown;
-  } else {
-    return Config::TurboJumpToggleActive.load();
-  }
 }
 
 bool ProcessSuperglide(int vkCode, bool isKeyDown) {
@@ -136,43 +149,35 @@ bool ProcessSuperglide(int vkCode, bool isKeyDown) {
   return action.keyDownEdge;
 }
 
-static bool PhysicalKeyHeld(int vk) {
-  auto it = Globals::g_KeyInfo.find(vk);
-  if (it != Globals::g_KeyInfo.end())
-    return it->second.physicalKeyDown.load(std::memory_order_relaxed);
-  return false;
-}
+// -----------------------------------------------------------------------
+// Active-state queries
+// -----------------------------------------------------------------------
 
 bool IsSpamTriggerActive() {
-  if (Config::KeySpamTriggerMode.load() == Config::KeybindMode::Hold) {
-    return PhysicalKeyHeld(
-        Config::KeySpamTrigger.load(std::memory_order_relaxed));
-  } else {
-    return Config::KeySpamTriggerToggleActive.load(std::memory_order_relaxed);
-  }
+  return IsFeatureActive(Config::KeySpamTrigger,
+                         Config::KeySpamTriggerMode,
+                         Config::KeySpamTriggerToggleActive);
 }
 
 bool IsTurboLootActive() {
-  if (Config::TurboLootMode.load() == Config::KeybindMode::Hold) {
-    return PhysicalKeyHeld(
-        Config::TurboLootKey.load(std::memory_order_relaxed));
-  } else {
-    return Config::TurboLootToggleActive.load(std::memory_order_relaxed);
-  }
+  return IsFeatureActive(Config::TurboLootKey,
+                         Config::TurboLootMode,
+                         Config::TurboLootToggleActive);
 }
 
 bool IsTurboJumpActive() {
-  if (Config::TurboJumpMode.load() == Config::KeybindMode::Hold) {
-    return PhysicalKeyHeld(
-        Config::TurboJumpKey.load(std::memory_order_relaxed));
-  } else {
-    return Config::TurboJumpToggleActive.load(std::memory_order_relaxed);
-  }
+  return IsFeatureActive(Config::TurboJumpKey,
+                         Config::TurboJumpMode,
+                         Config::TurboJumpToggleActive);
 }
 
 bool IsSuperglideActive() {
   return false; // One-shot trigger, no persistent active state.
 }
+
+// -----------------------------------------------------------------------
+// Dynamic keybinding capture
+// -----------------------------------------------------------------------
 
 bool HandleBind(int vkCode, bool isKeyDown) {
   std::atomic<int> *target = Globals::g_bindingTarget.load();
@@ -193,16 +198,17 @@ bool HandleBind(int vkCode, bool isKeyDown) {
     return true;
   }
 
-  // Ignore mouse buttons if they somehow get here (hooks usually filter them, but
-  // good to be safe)
+  // Ignore mouse buttons (hooks usually filter them, but defensive check)
   if (vkCode == VK_LBUTTON || vkCode == VK_RBUTTON || vkCode == VK_MBUTTON) {
     return true;
   }
 
   // Bind the key
   target->store(vkCode);
-  Globals::g_KeyInfo[vkCode].physicalKeyDown.store(true,
-                                                   std::memory_order_relaxed);
+  if (vkCode >= 0 && vkCode < 256) {
+    Globals::g_KeyInfo[vkCode].physicalKeyDown.store(true,
+                                                     std::memory_order_relaxed);
+  }
   {
     std::lock_guard<std::mutex> lock(g_stateMutex);
     g_previousKeyState[vkCode] = true;

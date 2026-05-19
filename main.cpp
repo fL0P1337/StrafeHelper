@@ -2,6 +2,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include "Application.h"
 #include "Config.h"
+#include "Globals.h"
 #include "Logger.h"
 #include "gui/GuiManager.h"
 #include "imgui/imgui.h"
@@ -11,20 +12,23 @@
 
 #pragma comment(lib, "dwmapi.lib")
 
-HWND g_hwnd = NULL;
-
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd,
                                                              UINT msg,
                                                              WPARAM wParam,
                                                              LPARAM lParam);
 
+// Window geometry constants
+static constexpr int kResizeBorder   = 6;  // px — hit-test resize border width
+static constexpr int kDragBorderBot  = 30; // px — drag strip at window bottom
+static constexpr int kTitleBarHeight = 51; // px — draggable title bar height
+static constexpr int kLogoAreaRight  = 160; // px — logo drag zone right edge
+
 static void EnableBorderlessResize(HWND hwnd) {
-  // Extend the frame into the client area to remove the standard window frame
-  // This removes the white top border completely
+  // Extend the frame into the client area to remove the standard window frame.
+  // This eliminates the white top border completely.
   MARGINS margins = {0, 0, 0, 1};
   DwmExtendFrameIntoClientArea(hwnd, &margins);
 
-  // Ensure the window has proper styling for borderless resize
   LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
   style |= WS_THICKFRAME | WS_POPUP;
   style &= ~WS_CAPTION;
@@ -40,12 +44,8 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam,
   // Handle WM_NCCALCSIZE to remove the non-client area (white top border)
   if (msg == WM_NCCALCSIZE) {
     if (wParam) {
-      // When wParam is TRUE, lParam points to NCCALCSIZE_PARAMS
-      // We return 0 to indicate the entire window is client area
-      return 0;
+      return 0; // Entire window is client area
     }
-    // When wParam is FALSE, lParam points to RECT
-    // We still return 0 to let DefWindowProc handle it
   }
 
   if (msg == WM_NCHITTEST) {
@@ -56,37 +56,24 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam,
       RECT rc;
       GetClientRect(hwnd, &rc);
 
-      const int resizeBorder = 6;
-      const int dragBorder = 30;
+      const bool left   = pt.x < kResizeBorder;
+      const bool right  = pt.x >= rc.right - kResizeBorder;
+      const bool top    = pt.y < kResizeBorder;
+      const bool bottom = pt.y >= rc.bottom - kResizeBorder;
 
-      bool left = pt.x < resizeBorder;
-      bool right = pt.x >= rc.right - resizeBorder;
-      bool top = pt.y < resizeBorder;
-      bool bottom = pt.y >= rc.bottom - resizeBorder;
+      if (top && left)    return HTTOPLEFT;
+      if (top && right)   return HTTOPRIGHT;
+      if (bottom && left) return HTBOTTOMLEFT;
+      if (bottom && right) return HTBOTTOMRIGHT;
+      if (left)   return HTLEFT;
+      if (right)  return HTRIGHT;
+      if (top)    return HTTOP;
+      if (bottom) return HTBOTTOM;
 
-      if (top && left)
-        return HTTOPLEFT;
-      if (top && right)
-        return HTTOPRIGHT;
-      if (bottom && left)
-        return HTBOTTOMLEFT;
-      if (bottom && right)
-        return HTBOTTOMRIGHT;
-      if (left)
-        return HTLEFT;
-      if (right)
-        return HTRIGHT;
-      if (top)
-        return HTTOP;
-      if (bottom)
-        return HTBOTTOM;
-
-      if (pt.y > (rc.bottom - dragBorder))
+      if (pt.y > (rc.bottom - kDragBorderBot))
         return HTCAPTION;
 
-      const int titleBarHeight = 51;
-      const int logoAreaRight = 160;
-      if (pt.y < titleBarHeight && pt.x < logoAreaRight)
+      if (pt.y < kTitleBarHeight && pt.x < kLogoAreaRight)
         return HTCAPTION;
     }
     return hit;
@@ -124,22 +111,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                    Config::APP_NAME + strlen(Config::APP_NAME)) +
       L" - Configuration";
 
-  // Create application window (WS_THICKFRAME required for native resize)
-  g_hwnd = ::CreateWindowW(wc.lpszClassName, windowTitle.c_str(),
+  // Local handle for the GUI window.
+  // NOTE: Globals::g_hWindow is intentionally NOT used here — it is owned
+  // by AppWindow.cpp (the hidden message window) and gets set during
+  // InitializeApplication() → CreateAppWindow(). Using Globals::g_hWindow
+  // here would cause it to be overwritten and the GUI would become invisible.
+  HWND hGuiWnd = ::CreateWindowW(wc.lpszClassName, windowTitle.c_str(),
                            WS_POPUP | WS_THICKFRAME, 100, 100, 420, 380, NULL,
                            NULL, wc.hInstance, NULL);
 
-  EnableBorderlessResize(g_hwnd);
+  EnableBorderlessResize(hGuiWnd);
 
   // Initialize Direct3D and ImGui
-  if (!Gui::GuiManager::GetInstance().Initialize(g_hwnd)) {
-    ::DestroyWindow(g_hwnd);
+  if (!Gui::GuiManager::GetInstance().Initialize(hGuiWnd)) {
+    ::DestroyWindow(hGuiWnd);
     ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
     return 1;
   }
 
-  // Initialize backend services (Hook thread, Spam thread)
-  // We pass hInstance to let application setup tray or background hooks
+  // Initialize backend services (input hook, spam thread, etc.)
+  // NOTE: This call sets Globals::g_hWindow to the hidden message window.
   if (!InitializeApplication(hInstance)) {
     Logger::GetInstance().Log("Application Initialization Failed!");
     MessageBoxA(
@@ -147,13 +138,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         "StrafeHelper failed to initialize. See console or log for details.",
         "Initialization Error", MB_OK | MB_ICONERROR);
     Gui::GuiManager::GetInstance().Shutdown();
-    ::DestroyWindow(g_hwnd);
+    ::DestroyWindow(hGuiWnd);
     ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
     return 1;
   }
 
-  ::ShowWindow(g_hwnd, SW_SHOWDEFAULT);
-  ::UpdateWindow(g_hwnd);
+  ::ShowWindow(hGuiWnd, SW_SHOWDEFAULT);
+  ::UpdateWindow(hGuiWnd);
 
   Logger::GetInstance().Log("StrafeHelper running. UI Active.");
 
@@ -179,7 +170,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
   // Cleanup
   CleanupApplication();
   Gui::GuiManager::GetInstance().Shutdown();
-  ::DestroyWindow(g_hwnd);
+  ::DestroyWindow(hGuiWnd);
   ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
 
   return 0;

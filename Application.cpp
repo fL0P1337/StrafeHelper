@@ -1,23 +1,32 @@
 // Application.cpp
+//
+// Responsibilities:
+//   - Defines all Globals:: variables (single definition rule).
+//   - Owns the active InputBackend instance and its lifecycle mutex.
+//   - Translates NEO_KEY_EVENT from the backend into VK events (DispatchKeyEvent).
+//   - Handles raw mouse side-button input (HandleSideMouseButton).
+//   - Manages application init / cleanup lifecycle.
+//   - Provides InjectKey() as the single injection point for all feature threads.
+//
+// Feature routing logic lives in EventDispatcher.cpp — this file does not
+// know about individual features (Spam, Turbo, Superglide, etc.).
+
 #include "Application.h"
 #include "AppWindow.h"
 #include "Config.h"
+#include "EventDispatcher.h"
 #include "Globals.h"
 #include "InputBackend.h"
 #include "InterceptionBackend.h"
 #include "KbdHookBackend.h"
 #include "KeybindManager.h"
-#include "MovementStateManager.h"
+#include "Logger.h"
 #include "SpamLogic.h"
 #include "SuperglideLogic.h"
 #include "TurboLogic.h"
 #include "Utils.h"
-#include <iostream>
-#include <map>
-#include <memory> // unique_ptr
+#include <memory>
 #include <mutex>
-#include <thread>
-#include <vector>
 #include <windows.h>
 
 // --- Define Global Variables (declared extern in Globals.h) ---
@@ -25,12 +34,11 @@ namespace Globals {
 HWND g_hWindow = NULL;
 HINSTANCE g_hInstance = NULL;
 
-// Need full types here since it's the definition
-std::map<int, KeyState> g_KeyInfo;
+KeyState g_KeyInfo[256]; // Zero-initialized; atomics default to false.
 std::vector<int> g_activeSpamKeys;
 std::atomic<unsigned long long> g_spamKeysEpoch{0};
 std::mutex g_activeKeysMutex;
-std::atomic<bool> g_isCSpamActive{false};
+std::atomic<bool> g_isSpamActive{false};
 
 SuperglideStats g_superglideStats{};
 
@@ -46,88 +54,13 @@ std::mutex g_backendMutex;
 } // namespace
 
 // -----------------------------------------------------------------------
-// Shared keybind dispatch logic used by both interception keyboard events
-// and the side-mouse hook path.
-// -----------------------------------------------------------------------
-bool HandleFeatureKeyEvent(int vkCode, bool isKeyDown) noexcept {
-  auto itKeyInfo = Globals::g_KeyInfo.find(vkCode);
-  if (itKeyInfo != Globals::g_KeyInfo.end()) {
-    itKeyInfo->second.physicalKeyDown.store(isKeyDown,
-                                            std::memory_order_relaxed);
-  }
-
-  const bool spamFeatureEnabled =
-      Config::EnableSpam.load(std::memory_order_relaxed);
-  const bool snapTapEnabled =
-      Config::EnableSnapTap.load(std::memory_order_relaxed);
-  const int currentTriggerKey =
-      Config::KeySpamTrigger.load(std::memory_order_relaxed);
-
-  // Trigger: gates macro spamming
-  if (vkCode == currentTriggerKey && spamFeatureEnabled) {
-    // Use KeybindManager to process hold/toggle mode
-    const bool shouldBeActive =
-        KeybindManager::ProcessSpamTrigger(vkCode, isKeyDown);
-
-    if (shouldBeActive &&
-        !Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
-      Globals::g_isCSpamActive.store(true, std::memory_order_relaxed);
-      std::cout << "Spam Activated" << std::endl;
-      OnSpamActivated(snapTapEnabled);
-    } else if (!shouldBeActive &&
-               Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
-      std::cout << "Spam Deactivated" << std::endl;
-      OnSpamDeactivated(snapTapEnabled);
-    }
-    return false;
-  }
-
-  // Turbo Loot
-  const int turboLootKey = Config::TurboLootKey.load(std::memory_order_relaxed);
-  if (vkCode == turboLootKey &&
-      Config::EnableTurboLoot.load(std::memory_order_relaxed)) {
-    KeybindManager::ProcessTurboLoot(vkCode, isKeyDown);
-    TriggerTurboLoot();
-    return false;
-  }
-
-  // Turbo Jump
-  const int turboJumpKey = Config::TurboJumpKey.load(std::memory_order_relaxed);
-  if (vkCode == turboJumpKey &&
-      Config::EnableTurboJump.load(std::memory_order_relaxed)) {
-    KeybindManager::ProcessTurboJump(vkCode, isKeyDown);
-    TriggerTurboJump();
-    return false;
-  }
-
-  // Superglide bind is suppressed so it never reaches the game.
-  const int superglideBindVK =
-      Config::SuperglideBind.load(std::memory_order_relaxed);
-  if (vkCode == superglideBindVK &&
-      Config::EnableSuperglide.load(std::memory_order_relaxed)) {
-    if (KeybindManager::ProcessSuperglide(vkCode, isKeyDown)) {
-      TriggerSuperglide();
-    }
-    return true;
-  }
-
-  const bool spamActive =
-      Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
-      spamFeatureEnabled;
-  if (HandleMovementKeyState(vkCode, isKeyDown, !isKeyDown, spamActive,
-                             snapTapEnabled)) {
-    return true;
-  }
-
-  return false;
-}
-
-// -----------------------------------------------------------------------
-// DispatchKeyEvent - translates a NEO_KEY_EVENT and feeds shared keybind logic.
+// DispatchKeyEvent — registered as the backend's event callback.
+// Translates a hardware-level NEO_KEY_EVENT into a VK code and delegates
+// to HandleFeatureKeyEvent (EventDispatcher.cpp) for feature routing.
 // Returns true if the physical event should be suppressed.
 // -----------------------------------------------------------------------
 bool DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept {
-  // Ignore events we ourselves injected (same marker as KbdHookBackend uses)
+  // Ignore events we ourselves injected (same marker as KbdHookBackend uses).
   if (evt.nativeInformation == NEO_SYNTHETIC_INFORMATION) {
     return false;
   }
@@ -145,22 +78,27 @@ bool DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept {
 
   const bool isKeyDown = (evt.flags & NEO_KEY_BREAK) == 0u;
 
-  // Handle dynamic keybinding capture
+  // Handle dynamic keybinding capture first; consumes the event if active.
   if (KeybindManager::HandleBind(static_cast<int>(vkCode), isKeyDown)) {
-    return true; // Suppress
+    return true;
   }
 
   return HandleFeatureKeyEvent(static_cast<int>(vkCode), isKeyDown);
 }
 
+// -----------------------------------------------------------------------
+// HandleSideMouseButton — raw mouse input path for X1/X2 buttons.
+// Called from AppWindow.cpp WM_INPUT handler.
+// -----------------------------------------------------------------------
 void HandleSideMouseButton(int vkCode, bool isDown) {
   if (!KeybindManager::HandleBind(vkCode, isDown)) {
-    HandleFeatureKeyEvent(vkCode, isDown);
+    // Mouse side buttons are never suppressed — we only route them.
+    (void)HandleFeatureKeyEvent(vkCode, isDown);
   }
 }
 
 // -----------------------------------------------------------------------
-// SwitchBackend — callable from the GUI thread at runtime
+// SwitchBackend — callable from the GUI thread at runtime.
 // -----------------------------------------------------------------------
 void SwitchBackend(Config::InputBackendKind kind) {
   std::lock_guard<std::mutex> lock(g_backendMutex);
@@ -168,10 +106,9 @@ void SwitchBackend(Config::InputBackendKind kind) {
   const auto current =
       static_cast<Config::InputBackendKind>(Config::SelectedBackend.load());
   if (current == kind && g_activeBackend) {
-    return; // nothing to do
+    return; // Already running the requested backend.
   }
 
-  // Stop whichever backend is currently running
   if (g_activeBackend) {
     g_activeBackend->Shutdown();
     g_activeBackend.reset();
@@ -180,31 +117,34 @@ void SwitchBackend(Config::InputBackendKind kind) {
   Config::SelectedBackend.store(static_cast<int>(kind));
   Config::SaveConfig();
 
-  // Start the newly selected backend
-  std::unique_ptr<InputBackend> backend;
-  if (kind == Config::InputBackendKind::Interception) {
-    backend = std::make_unique<InterceptionBackend>();
-  } else {
-    backend = std::make_unique<KbdHookBackend>();
-  }
+  auto makeBackend = [&]() -> std::unique_ptr<InputBackend> {
+    if (kind == Config::InputBackendKind::Interception) {
+      return std::make_unique<InterceptionBackend>();
+    }
+    return std::make_unique<KbdHookBackend>();
+  };
 
+  std::unique_ptr<InputBackend> backend = makeBackend();
   backend->SetCallback(DispatchKeyEvent);
   if (!backend->Initialize()) {
-    std::cout << "[SwitchBackend] Backend initialization failed. Falling back to KbdHook." << std::endl;
-    // Fall back to KbdHook if the requested backend fails
-    Config::SelectedBackend.store(static_cast<int>(Config::InputBackendKind::KbdHook));
+    Logger::GetInstance().Log(
+        "[SwitchBackend] Backend initialization failed. Falling back to KbdHook.");
+    kind = Config::InputBackendKind::KbdHook;
+    Config::SelectedBackend.store(static_cast<int>(kind));
     Config::SaveConfig();
-    
+
     backend = std::make_unique<KbdHookBackend>();
     backend->SetCallback(DispatchKeyEvent);
     if (!backend->Initialize()) {
-      std::cout << "[SwitchBackend] Fallback backend initialization failed!" << std::endl;
+      Logger::GetInstance().Log(
+          "[SwitchBackend] Fallback backend initialization failed!");
       return;
     }
   }
 
   g_activeBackend = std::move(backend);
-  std::cout << "[SwitchBackend] Switched to " << g_activeBackend->Name() << std::endl;
+  Logger::GetInstance().Log(
+      std::string("[SwitchBackend] Switched to ") + g_activeBackend->Name());
 }
 
 bool GetActiveBackendStatus(BackendStatus &out) noexcept {
@@ -215,27 +155,24 @@ bool GetActiveBackendStatus(BackendStatus &out) noexcept {
   return false;
 }
 
+// -----------------------------------------------------------------------
+// InitializeApplication / CleanupApplication — top-level lifecycle.
+// -----------------------------------------------------------------------
 bool InitializeApplication(HINSTANCE hInstance) {
   Globals::g_hInstance = hInstance;
 
   Config::LoadConfig();
-
-  // Initialize keybind manager for edge detection
   KeybindManager::Initialize();
 
-  // Window creation moved to GuiManager inside main.cpp, but tray icon might
-  // still rely on it. We will keep CreateAppWindow as a hidden message window
-  // for Tray/Internal events.
+  // Create hidden message window (tray icon / raw mouse input).
   if (!CreateAppWindow(hInstance)) {
     return false;
   }
 
-  for (int vk = 1; vk <= 0xFE; ++vk) {
-    Globals::g_KeyInfo[vk];
-  }
-  std::cout << "Key states initialized." << std::endl;
+  // g_KeyInfo[256] is zero-initialized by default construction — no loop needed.
+  Logger::GetInstance().Log("Key states initialized.");
 
-  // --- Start the selected input backend ---
+  // Start the selected input backend.
   const auto backendKind =
       static_cast<Config::InputBackendKind>(Config::SelectedBackend.load());
 
@@ -248,12 +185,15 @@ bool InitializeApplication(HINSTANCE hInstance) {
 
   backend->SetCallback(DispatchKeyEvent);
   if (!backend->Initialize()) {
-    std::cout << "[InitializeApplication] Backend init failed. Falling back to KbdHook." << std::endl;
-    Config::SelectedBackend.store(static_cast<int>(Config::InputBackendKind::KbdHook));
+    Logger::GetInstance().Log(
+        "[InitializeApplication] Backend init failed. Falling back to KbdHook.");
+    Config::SelectedBackend.store(
+        static_cast<int>(Config::InputBackendKind::KbdHook));
     backend = std::make_unique<KbdHookBackend>();
     backend->SetCallback(DispatchKeyEvent);
     if (!backend->Initialize()) {
-      std::cout << "[InitializeApplication] Fallback backend init failed!" << std::endl;
+      Logger::GetInstance().Log(
+          "[InitializeApplication] Fallback backend init failed!");
       if (Globals::g_hWindow)
         DestroyWindow(Globals::g_hWindow);
       UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
@@ -267,7 +207,6 @@ bool InitializeApplication(HINSTANCE hInstance) {
   }
 
   if (!StartSpamThread()) {
-    // Need to stop hook/backend thread cleanly
     {
       std::lock_guard<std::mutex> lock(g_backendMutex);
       if (g_activeBackend) {
@@ -275,7 +214,6 @@ bool InitializeApplication(HINSTANCE hInstance) {
         g_activeBackend.reset();
       }
     }
-
     if (Globals::g_hWindow)
       DestroyWindow(Globals::g_hWindow);
     UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
@@ -286,19 +224,18 @@ bool InitializeApplication(HINSTANCE hInstance) {
   StartTurboJumpThread();
   StartSuperglideThread();
 
-  std::cout << "Application Initialization Successful." << std::endl;
+  Logger::GetInstance().Log("Application Initialization Successful.");
   return true;
 }
 
 void CleanupApplication() {
-  std::cout << "--- Starting Application Cleanup ---" << std::endl;
+  Logger::GetInstance().Log("--- Starting Application Cleanup ---");
 
   StopSpamThread();
   StopTurboLootThread();
   StopTurboJumpThread();
   StopSuperglideThread();
 
-  // Stop whichever input backend is active
   {
     std::lock_guard<std::mutex> lock(g_backendMutex);
     if (g_activeBackend) {
@@ -311,15 +248,19 @@ void CleanupApplication() {
 
   if (Globals::g_hInstance) {
     if (UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance)) {
-      std::cout << "Window class unregistered." << std::endl;
+      Logger::GetInstance().Log("Window class unregistered.");
     }
   }
 
   Globals::g_hInstance = NULL;
-
-  std::cout << "--- Application Cleanup Finished ---" << std::endl;
+  Logger::GetInstance().Log("--- Application Cleanup Finished ---");
 }
 
+// -----------------------------------------------------------------------
+// InjectKey — the single injection point used by all feature threads.
+// Acquires the backend mutex, looks up the scan code, and calls the
+// backend's InjectKey method.
+// -----------------------------------------------------------------------
 bool InjectKey(int vk, bool keyDown) noexcept {
   uint16_t flags = 0;
   if (!keyDown) {

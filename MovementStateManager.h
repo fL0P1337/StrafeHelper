@@ -8,7 +8,9 @@ void OnSnapTapToggled(bool enabled);
 
 void OnSpamActivated(bool snapTapEnabled);
 void OnSpamDeactivated(bool snapTapEnabled);
-bool HandleMovementKeyState(int vkCode, bool isKeyDown, bool isKeyUp,
+
+// isKeyUp has been removed — it was always !isKeyDown at every call site.
+bool HandleMovementKeyState(int vkCode, bool isKeyDown,
                             bool spamActive, bool snapTapEnabled);
 
 // Called when runtime configuration changes require output state to be re-applied.

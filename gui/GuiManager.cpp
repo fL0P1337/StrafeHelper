@@ -719,7 +719,7 @@ void GuiManager::RenderStateContent() {
   {
     const bool enabled = Config::EnableSpam.load(std::memory_order_relaxed);
     const bool active =
-        enabled && Globals::g_isCSpamActive.load(std::memory_order_relaxed);
+        enabled && Globals::g_isSpamActive.load(std::memory_order_relaxed);
     StatusDot(active ? FeatureStatus::Active
                      : (enabled ? FeatureStatus::Idle : FeatureStatus::Off));
     ImGui::SameLine();
