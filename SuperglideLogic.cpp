@@ -14,11 +14,11 @@
 #include "Config.h"
 #include "globals.h"
 #include "Application.h"
+#include "Logger.h"
 #include "Utils.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <iostream>
 #include <mutex>
 #include <thread>
 #include <timeapi.h> // timeBeginPeriod / timeEndPeriod
@@ -37,11 +37,23 @@ std::mutex g_superglideCvMtx;
 std::condition_variable g_superglideCv;
 bool g_superglideCvFlag = false;
 
-// Injects a single key tap (down then up) using KEYEVENTF_SCANCODE.
-// Matches the injection style used throughout the rest of the codebase.
+// Injects a single key tap (down then up).
 static void InjectKeyTap(int vk) noexcept {
   InjectKey(vk, true);
   InjectKey(vk, false);
+}
+
+// Generic stop helper shared with TurboLogic pattern.
+template <typename TriggerFn>
+void StopWorkerThread(std::jthread &thread, TriggerFn trigger,
+                      const char *name) {
+  if (thread.joinable()) {
+    Logger::GetInstance().Log(std::string("Requesting ") + name + " thread stop...");
+    thread.request_stop();
+    trigger();
+    thread.join();
+    Logger::GetInstance().Log(std::string(name) + " thread stopped.");
+  }
 }
 
 void SuperglideThreadFunc(std::stop_token stopToken) {
@@ -121,7 +133,7 @@ void SuperglideThreadFunc(std::stop_token stopToken) {
   }
 
   timeEndPeriod(1);
-  std::cout << "Superglide thread exiting." << std::endl;
+  Logger::GetInstance().Log("Superglide thread exiting.");
 }
 
 } // namespace
@@ -131,18 +143,12 @@ void SuperglideThreadFunc(std::stop_token stopToken) {
 bool StartSuperglideThread() {
   StopSuperglideThread();
   g_superglideThread = std::jthread(SuperglideThreadFunc);
-  std::cout << "Superglide thread started." << std::endl;
+  Logger::GetInstance().Log("Superglide thread started.");
   return true;
 }
 
 void StopSuperglideThread() {
-  if (g_superglideThread.joinable()) {
-    std::cout << "Requesting Superglide thread stop..." << std::endl;
-    g_superglideThread.request_stop();
-    TriggerSuperglide();
-    g_superglideThread.join();
-    std::cout << "Superglide thread stopped." << std::endl;
-  }
+  StopWorkerThread(g_superglideThread, TriggerSuperglide, "Superglide");
 }
 
 void TriggerSuperglide() noexcept {

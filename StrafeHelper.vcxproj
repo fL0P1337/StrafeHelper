@@ -147,6 +147,7 @@
   <ItemGroup>
     <ClInclude Include="Application.h" />
     <ClInclude Include="AppWindow.h" />
+    <ClInclude Include="EventDispatcher.h" />
     <ClInclude Include="Config.h" />
     <ClInclude Include="Globals.h" />
     <ClInclude Include="InputBackend.h" />
@@ -173,6 +174,7 @@
   <ItemGroup>
     <ClCompile Include="Application.cpp" />
     <ClCompile Include="AppWindow.cpp" />
+    <ClCompile Include="EventDispatcher.cpp" />
     <ClCompile Include="Config.cpp" />
     <ClCompile Include="InterceptionBackend.cpp" />
     <ClCompile Include="KbdHookBackend.cpp" />

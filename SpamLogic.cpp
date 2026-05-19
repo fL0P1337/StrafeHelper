@@ -4,13 +4,12 @@
 #include "Config.h"
 #include "Globals.h"
 #include "Application.h"
+#include "Logger.h"
 #include "Utils.h"
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
-#include <iostream>
 #include <mutex>
-#include <random>
 #include <thread>
 #include <timeapi.h>
 #include <vector>
@@ -27,13 +26,7 @@ bool IsPhysicallyHeldMovementKey(int vkCode) {
   if (vkCode != 'W' && vkCode != 'A' && vkCode != 'S' && vkCode != 'D') {
     return false;
   }
-
-  const auto it = Globals::g_KeyInfo.find(vkCode);
-  if (it == Globals::g_KeyInfo.end()) {
-    return false;
-  }
-
-  return it->second.physicalKeyDown.load(std::memory_order_relaxed);
+  return Globals::g_KeyInfo[vkCode].physicalKeyDown.load(std::memory_order_relaxed);
 }
 
 void GetSpamSnapshot(std::vector<int> &keys, unsigned long long &epoch) {
@@ -79,7 +72,7 @@ void SpamThreadFunc(std::stop_token stopToken) {
     DWORD waitTimeout = INFINITE;
 
     bool shouldBeActive =
-        Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
+        Globals::g_isSpamActive.load(std::memory_order_relaxed) &&
         Config::EnableSpam.load(std::memory_order_relaxed);
 
     if (shouldBeActive) {
@@ -128,7 +121,7 @@ void SpamThreadFunc(std::stop_token stopToken) {
       break;
     }
 
-    shouldBeActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
+    shouldBeActive = Globals::g_isSpamActive.load(std::memory_order_relaxed) &&
                      Config::EnableSpam.load(std::memory_order_relaxed);
 
     if (!shouldBeActive) {
@@ -154,7 +147,7 @@ void SpamThreadFunc(std::stop_token stopToken) {
       }
     }
 
-    shouldBeActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
+    shouldBeActive = Globals::g_isSpamActive.load(std::memory_order_relaxed) &&
                      Config::EnableSpam.load(std::memory_order_relaxed);
     if (!shouldBeActive) {
       continue;
@@ -179,7 +172,7 @@ void SpamThreadFunc(std::stop_token stopToken) {
   releaseVirtuallyDownKeys(false);
 
   timeEndPeriod(1);
-  std::cout << "Spam thread exiting." << std::endl;
+  Logger::GetInstance().Log("Spam thread exiting.");
 }
 } // namespace
 
@@ -190,7 +183,7 @@ void SendKeyInputBatch(const std::vector<int> &keys, bool keyDown) {
 }
 
 void CleanupSpamState(bool restoreHeldKeys) {
-  Globals::g_isCSpamActive.store(false, std::memory_order_relaxed);
+  Globals::g_isSpamActive.store(false, std::memory_order_relaxed);
 
   std::vector<int> keysThatWereSpamming;
   std::vector<int> keysToRelease;
@@ -230,15 +223,17 @@ void CleanupSpamState(bool restoreHeldKeys) {
 
   if (!keysToRelease.empty()) {
     SendKeyInputBatch(keysToRelease, false);
-    std::cout << "  Sent final UP for spammed keys." << std::endl;
+    Logger::GetInstance().Log("  Sent final UP for spammed keys.");
   }
 
   if (restoreHeldKeys && !keysToRestoreDown.empty()) {
     SendKeyInputBatch(keysToRestoreDown, true);
-    std::cout << "  Restored DOWN state for physically held keys: ";
-    for (int k : keysToRestoreDown)
-      std::cout << static_cast<char>(k) << " ";
-    std::cout << std::endl;
+    std::string msg = "  Restored DOWN state for physically held keys:";
+    for (int k : keysToRestoreDown) {
+      msg += ' ';
+      msg += static_cast<char>(k);
+    }
+    Logger::GetInstance().Log(msg);
   }
 
   TriggerSpamEvent();
@@ -247,17 +242,17 @@ void CleanupSpamState(bool restoreHeldKeys) {
 bool StartSpamThread() {
   StopSpamThread();
   g_spamThread = std::jthread(SpamThreadFunc);
-  std::cout << "Spam thread started." << std::endl;
+  Logger::GetInstance().Log("Spam thread started.");
   return true;
 }
 
 void StopSpamThread() {
   if (g_spamThread.joinable()) {
-    std::cout << "Requesting spam thread stop..." << std::endl;
+    Logger::GetInstance().Log("Requesting spam thread stop...");
     g_spamThread.request_stop();
     TriggerSpamEvent();
     g_spamThread.join();
-    std::cout << "Spam thread stopped." << std::endl;
+    Logger::GetInstance().Log("Spam thread stopped.");
   }
 }
 

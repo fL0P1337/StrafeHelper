@@ -7,7 +7,7 @@
 #include "SpamLogic.h"
 #include "Utils.h"
 #include <algorithm>
-#include <iostream>
+#include <mutex>
 #include <vector>
 #include <windows.h>
 
@@ -29,6 +29,11 @@ struct AxisState {
   int heldCount = 0;
   int physicallyHeld[2] = {0, 0}; // press order (LIFO last)
 };
+
+// Mutex protecting AxisState and virtual axis state from concurrent access
+// between the hook thread (HandleMovementKeyState) and the GUI thread
+// (OnSnapTapToggled, RefreshMovementState).
+std::mutex g_axisMutex;
 
 AxisState g_axisX;
 AxisState g_axisY;
@@ -94,7 +99,8 @@ void SendKeyUpImmediate(int vkCode) {
   InjectKey(vkCode, false);
 }
 
-void ApplyVirtualAxisState(int &currentVk, int desiredVk) {
+// NOTE: Must be called with g_axisMutex held.
+void ApplyVirtualAxisState_Locked(int &currentVk, int desiredVk) {
   if (currentVk == desiredVk)
     return;
 
@@ -107,20 +113,23 @@ void ApplyVirtualAxisState(int &currentVk, int desiredVk) {
   currentVk = desiredVk;
 }
 
-void ReleaseSnapTapVirtualKeys() {
-  ApplyVirtualAxisState(g_virtualAxisX, 0);
-  ApplyVirtualAxisState(g_virtualAxisY, 0);
+// NOTE: Must be called with g_axisMutex held.
+void ReleaseSnapTapVirtualKeys_Locked() {
+  ApplyVirtualAxisState_Locked(g_virtualAxisX, 0);
+  ApplyVirtualAxisState_Locked(g_virtualAxisY, 0);
 }
 
-void ApplySnapTapOutput(bool spamActive) {
+// NOTE: Must be called with g_axisMutex held.
+void ApplySnapTapOutput_Locked(bool spamActive) {
   const int desiredX = spamActive ? 0 : g_axisX.activeKey;
   const int desiredY = spamActive ? 0 : g_axisY.activeKey;
 
-  ApplyVirtualAxisState(g_virtualAxisX, desiredX);
-  ApplyVirtualAxisState(g_virtualAxisY, desiredY);
+  ApplyVirtualAxisState_Locked(g_virtualAxisX, desiredX);
+  ApplyVirtualAxisState_Locked(g_virtualAxisY, desiredY);
 }
 
-std::vector<int> BuildDesiredSpamKeys(bool snapTapEnabled) {
+// NOTE: Must be called with g_axisMutex held.
+std::vector<int> BuildDesiredSpamKeys_Locked(bool snapTapEnabled) {
   std::vector<int> keys;
   keys.reserve(2);
 
@@ -141,8 +150,9 @@ std::vector<int> BuildDesiredSpamKeys(bool snapTapEnabled) {
   return keys;
 }
 
-void PublishSpamKeysFromState(bool snapTapEnabled) {
-  const std::vector<int> desiredKeys = BuildDesiredSpamKeys(snapTapEnabled);
+// NOTE: Must be called with g_axisMutex held.
+void PublishSpamKeysFromState_Locked(bool snapTapEnabled) {
+  const std::vector<int> desiredKeys = BuildDesiredSpamKeys_Locked(snapTapEnabled);
   bool changed = false;
 
   {
@@ -187,48 +197,52 @@ void SendKeyDownForPhysicallyHeldWasd() {
 } // namespace
 
 void OnSpamActivated(bool snapTapEnabled) {
+  std::lock_guard<std::mutex> lock(g_axisMutex);
   // Ensure any held movement keys are virtually UP while spamming.
-  ApplySnapTapOutput(true);
+  ApplySnapTapOutput_Locked(true);
   SendKeyUpForPhysicallyHeldWasd();
-  PublishSpamKeysFromState(snapTapEnabled);
+  PublishSpamKeysFromState_Locked(snapTapEnabled);
 }
 
 void OnSpamDeactivated(bool snapTapEnabled) {
+  std::lock_guard<std::mutex> lock(g_axisMutex);
   if (snapTapEnabled) {
     CleanupSpamState(false);
-    ApplySnapTapOutput(false);
+    ApplySnapTapOutput_Locked(false);
   } else {
     CleanupSpamState(true);
   }
 }
 
-bool HandleMovementKeyState(int vkCode, bool isKeyDown, bool isKeyUp,
+bool HandleMovementKeyState(int vkCode, bool isKeyDown,
                             bool spamActive, bool snapTapEnabled) {
   if (!IsWasdVk(vkCode)) {
     return false;
   }
 
+  std::lock_guard<std::mutex> lock(g_axisMutex);
+
   AxisState *axis = AxisForVk(vkCode);
   if (axis) {
     if (isKeyDown) {
       AxisOnKeyDown(*axis, vkCode);
-    } else if (isKeyUp) {
+    } else {
       AxisOnKeyUp(*axis, vkCode);
     }
   }
 
   if (spamActive) {
     // Spam layer keeps movement keys virtually UP and spams the active key(s).
-    ApplySnapTapOutput(true);
+    ApplySnapTapOutput_Locked(true);
     SendKeyUpImmediate(vkCode);
-    PublishSpamKeysFromState(snapTapEnabled);
+    PublishSpamKeysFromState_Locked(snapTapEnabled);
     return true;
   }
 
   if (snapTapEnabled) {
     // SnapTap is always-on (even without trigger). It owns WASD output when
     // enabled.
-    ApplySnapTapOutput(false);
+    ApplySnapTapOutput_Locked(false);
     return true;
   }
 
@@ -239,8 +253,10 @@ void OnSnapTapToggled(bool enabled) {
   const bool spamFeatureEnabled =
       Config::EnableSpam.load(std::memory_order_relaxed);
   const bool spamActive =
-      Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
+      Globals::g_isSpamActive.load(std::memory_order_relaxed) &&
       spamFeatureEnabled;
+
+  std::lock_guard<std::mutex> lock(g_axisMutex);
 
   if (enabled) {
     // Clear any physical holds currently down in the target app before SnapTap
@@ -248,11 +264,11 @@ void OnSnapTapToggled(bool enabled) {
     if (!spamActive) {
       SendKeyUpForPhysicallyHeldWasd();
     }
-    ApplySnapTapOutput(spamActive);
+    ApplySnapTapOutput_Locked(spamActive);
   } else {
     // Release any SnapTap-owned keys so we don't leave the target app in a
     // stuck state.
-    ReleaseSnapTapVirtualKeys();
+    ReleaseSnapTapVirtualKeys_Locked();
 
     // Restore physical holds immediately (otherwise the user must re-press).
     if (!spamActive) {
@@ -261,7 +277,7 @@ void OnSnapTapToggled(bool enabled) {
   }
 
   if (spamActive) {
-    PublishSpamKeysFromState(enabled);
+    PublishSpamKeysFromState_Locked(enabled);
   }
 }
 
@@ -271,16 +287,18 @@ void RefreshMovementState() {
   const bool snapTapEnabled =
       Config::EnableSnapTap.load(std::memory_order_relaxed);
   const bool spamActive =
-      Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
+      Globals::g_isSpamActive.load(std::memory_order_relaxed) &&
       spamFeatureEnabled;
 
+  std::lock_guard<std::mutex> lock(g_axisMutex);
+
   if (snapTapEnabled) {
-    ApplySnapTapOutput(spamActive);
+    ApplySnapTapOutput_Locked(spamActive);
   } else {
-    ReleaseSnapTapVirtualKeys();
+    ReleaseSnapTapVirtualKeys_Locked();
   }
 
   if (spamActive) {
-    PublishSpamKeysFromState(snapTapEnabled);
+    PublishSpamKeysFromState_Locked(snapTapEnabled);
   }
 }

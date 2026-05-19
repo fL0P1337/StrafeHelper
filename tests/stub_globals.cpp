@@ -8,11 +8,12 @@ namespace Globals {
 HWND g_hWindow = nullptr;
 HINSTANCE g_hInstance = nullptr;
 
-std::map<int, KeyState> g_KeyInfo;
+// Fixed-size array matching the production definition.
+KeyState g_KeyInfo[256];
 std::vector<int> g_activeSpamKeys;
 std::atomic<unsigned long long> g_spamKeysEpoch = 0;
 std::mutex g_activeKeysMutex;
-std::atomic<bool> g_isCSpamActive = false;
+std::atomic<bool> g_isSpamActive = false;
 
 SuperglideStats g_superglideStats{};
 
