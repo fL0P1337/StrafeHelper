@@ -1,7 +1,9 @@
 // TurboLogic.cpp
 #include "TurboLogic.h"
+#include "PrecisionTimer.h"
 #include "Config.h"
 #include "Globals.h"
+#include "Application.h"
 #include "KeybindManager.h"
 #include "Utils.h"
 #include <atomic>
@@ -34,9 +36,7 @@ void RunTurboLoop(std::stop_token stopToken,
                   std::atomic<int> &configDuration, bool (*isActiveFunc)(),
                   const char *threadName) {
   timeBeginPeriod(1);
-
-  LARGE_INTEGER freq;
-  QueryPerformanceFrequency(&freq);
+  PrecisionTimer timer;
 
   while (!stopToken.stop_requested()) {
     DWORD timeout = INFINITE;
@@ -68,45 +68,18 @@ void RunTurboLoop(std::stop_token stopToken,
 
     const int key = configKey.load(std::memory_order_relaxed);
 
-    INPUT input = {INPUT_KEYBOARD};
-    input.ki.wVk = 0;
-    input.ki.wScan = VirtualKeyToScanCode(key);
-    input.ki.dwFlags = VirtualKeyInputFlags(key, true);
-    input.ki.dwExtraInfo = GetMessageExtraInfo();
-    SendInput(1, &input, sizeof(INPUT));
+    InjectKey(key, true);
 
     DWORD duration =
         ApplyJitter(configDuration.load(std::memory_order_relaxed));
     if (duration > 0) {
-      LARGE_INTEGER start;
-      QueryPerformanceCounter(&start);
-      // duration is in milliseconds. Convert to ticks: duration * (freq / 1000)
-      const LONGLONG durationTicks =
-          static_cast<LONGLONG>(duration) * (freq.QuadPart / 1000LL);
-      const LONGLONG targetTick = start.QuadPart + durationTicks;
-      const LONGLONG spinThreshold = freq.QuadPart / 2000LL; // 0.5 ms in ticks
-
-      LARGE_INTEGER now;
-      do {
-        QueryPerformanceCounter(&now);
-        const LONGLONG remaining = targetTick - now.QuadPart;
-
-        if (stopToken.stop_requested()) {
-          break;
-        }
-
-        if (remaining > spinThreshold) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-      } while (now.QuadPart < targetTick);
-
-      if (stopToken.stop_requested())
+      if (!timer.PreciseSleep(duration, stopToken)) {
         break;
+      }
     }
 
     // Send key-up
-    input.ki.dwFlags = VirtualKeyInputFlags(key, false);
-    SendInput(1, &input, sizeof(INPUT));
+    InjectKey(key, false);
   }
 
   timeEndPeriod(1);

@@ -10,8 +10,10 @@
 // Windows Sleep is accurate to ~1 ms when timeBeginPeriod(1) is active.
 
 #include "SuperglideLogic.h"
+#include "PrecisionTimer.h"
 #include "Config.h"
 #include "globals.h"
+#include "Application.h"
 #include "Utils.h"
 #include <atomic>
 #include <chrono>
@@ -38,29 +40,15 @@ bool g_superglideCvFlag = false;
 // Injects a single key tap (down then up) using KEYEVENTF_SCANCODE.
 // Matches the injection style used throughout the rest of the codebase.
 static void InjectKeyTap(int vk) noexcept {
-  INPUT inputs[2]{};
-
-  inputs[0].type = INPUT_KEYBOARD;
-  inputs[0].ki.wVk = 0;
-  inputs[0].ki.wScan = VirtualKeyToScanCode(vk);
-  inputs[0].ki.dwFlags = VirtualKeyInputFlags(vk, true);
-
-  inputs[1].type = INPUT_KEYBOARD;
-  inputs[1].ki.wVk = 0;
-  inputs[1].ki.wScan = VirtualKeyToScanCode(vk);
-  inputs[1].ki.dwFlags = VirtualKeyInputFlags(vk, false);
-
-  SendInput(2, inputs, sizeof(INPUT));
+  InjectKey(vk, true);
+  InjectKey(vk, false);
 }
 
 void SuperglideThreadFunc(std::stop_token stopToken) {
   // Raise timer resolution to ~1 ms so Sleep is accurate enough for
   // sub-frame timing at high frame rates.
   timeBeginPeriod(1);
-
-  // Cache QPC frequency — constant for the lifetime of the process.
-  LARGE_INTEGER freq;
-  QueryPerformanceFrequency(&freq);
+  PrecisionTimer timer;
 
   while (!stopToken.stop_requested()) {
     {
@@ -76,37 +64,22 @@ void SuperglideThreadFunc(std::stop_token stopToken) {
       continue;
 
     const double targetFPS = Config::TargetFPS.load(std::memory_order_relaxed);
-
-    // Exact frame duration in QPC ticks — no integer truncation.
-    // (DWORD-cast was losing the fractional ms, causing consistent undershoot)
-    const LONGLONG frameTimeTicks =
-        static_cast<LONGLONG>(static_cast<double>(freq.QuadPart) / targetFPS);
-
-    // Spin threshold: stop coarse-sleeping 0.5 ms before the target so we
-    // don't overshoot, then busy-spin for the remainder.
-    const LONGLONG spinThreshold = freq.QuadPart / 2000LL; // 0.5 ms in ticks
+    const double frameTimeMs = 1000.0 / targetFPS;
 
     // 1. Jump tap — record timing immediately after injection so the
     //    measurement baseline matches the practice tool.
     InjectKeyTap(kJumpVK);
 
-    LARGE_INTEGER start;
-    QueryPerformanceCounter(&start);
-    const LONGLONG targetTick = start.QuadPart + frameTimeTicks;
+    const LONGLONG start = PrecisionTimer::GetCurrentTicks();
+    const LONGLONG targetTick = start + timer.MsToTicks(frameTimeMs);
 
     // 2. Hybrid wait: coarse Sleep(1) releases the CPU for most of the frame,
     //    then we spin on QPC for the final ~0.5 ms for precision.
-    LARGE_INTEGER now;
-    do {
-      QueryPerformanceCounter(&now);
-      const LONGLONG remaining = targetTick - now.QuadPart;
-      if (remaining > spinThreshold) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      }
-    } while (now.QuadPart < targetTick);
-
-    if (stopToken.stop_requested())
+    if (!timer.PreciseSleepUntil(targetTick, stopToken)) {
       break;
+    }
+
+    const LONGLONG now = PrecisionTimer::GetCurrentTicks();
 
     // 3. Crouch tap — fires at exactly 1 frame after Jump.
     InjectKeyTap(kCrouchVK);
@@ -117,9 +90,8 @@ void SuperglideThreadFunc(std::stop_token stopToken) {
     //   if < 2 frames: chance = (2 - elapsedFrames) * 100  (slightly late)
     //   else: 0  (way too late)
     {
-      const double elapsedTicks =
-          static_cast<double>(now.QuadPart - start.QuadPart);
-      const double elapsedSec = elapsedTicks / static_cast<double>(freq.QuadPart);
+      const double elapsedTicks = static_cast<double>(now - start);
+      const double elapsedSec = elapsedTicks / static_cast<double>(timer.GetFrequency());
       const double frameTimeSec = 1.0 / targetFPS;
       const double elapsedFrames = elapsedSec / frameTimeSec;
 

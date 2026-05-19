@@ -24,7 +24,7 @@ void test_VirtualKeyToScanCode() {
     std::cout << "test_VirtualKeyToScanCode passed!" << std::endl;
 }
 
-int main() {
+int run_utils_tests() {
     test_VirtualKeyToScanCode();
     return 0;
 }

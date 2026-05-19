@@ -76,6 +76,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalIncludeDirectories>$(ProjectDir)imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -92,6 +93,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalIncludeDirectories>$(ProjectDir)imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -108,7 +110,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalIncludeDirectories>$(ProjectDir)imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -155,6 +157,7 @@
     <ClInclude Include="SpamLogic.h" />
     <ClInclude Include="SuperglideLogic.h" />
     <ClInclude Include="TurboLogic.h" />
+    <ClInclude Include="PrecisionTimer.h" />
     <ClInclude Include="catrine\elements.h" />
     <ClInclude Include="Utils.h" />
     <ClInclude Include="Logger.h" />
@@ -179,6 +182,7 @@
     <ClCompile Include="SpamLogic.cpp" />
     <ClCompile Include="SuperglideLogic.cpp" />
     <ClCompile Include="TurboLogic.cpp" />
+    <ClCompile Include="PrecisionTimer.cpp" />
     <ClCompile Include="catrine\elements.cpp" />
     <ClCompile Include="Utils.cpp" />
     <ClCompile Include="Logger.cpp" />

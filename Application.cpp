@@ -319,3 +319,21 @@ void CleanupApplication() {
 
   std::cout << "--- Application Cleanup Finished ---" << std::endl;
 }
+
+bool InjectKey(int vk, bool keyDown) noexcept {
+  uint16_t flags = 0;
+  if (!keyDown) {
+    flags |= NEO_KEY_BREAK;
+  }
+  const UINT scanCode = MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC_EX);
+  if ((scanCode & 0xFF00u) == 0xE000u) {
+    flags |= NEO_KEY_E0;
+  }
+  const uint16_t sc = static_cast<uint16_t>(scanCode & 0xFFu);
+
+  std::lock_guard<std::mutex> lock(g_backendMutex);
+  if (g_activeBackend) {
+    return g_activeBackend->InjectKey(sc, flags);
+  }
+  return false;
+}

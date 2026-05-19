@@ -16,3 +16,4 @@ void SwitchBackend(Config::InputBackendKind kind);
 
 bool DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept;
 bool GetActiveBackendStatus(BackendStatus &out) noexcept;
+bool InjectKey(int vk, bool keyDown) noexcept;

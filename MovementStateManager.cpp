@@ -2,6 +2,7 @@
 #include "MovementStateManager.h"
 #include "Config.h"
 #include "Globals.h"
+#include "Application.h"
 #include "KeybindManager.h"
 #include "SpamLogic.h"
 #include "Utils.h"
@@ -86,21 +87,11 @@ bool AxisOnKeyUp(AxisState &axis, int vk) {
 }
 
 void SendKeyDownImmediate(int vkCode) {
-  INPUT input = {INPUT_KEYBOARD};
-  input.ki.wVk = 0;
-  input.ki.wScan = VirtualKeyToScanCode(vkCode);
-  input.ki.dwFlags = VirtualKeyInputFlags(vkCode, true);
-  input.ki.dwExtraInfo = GetMessageExtraInfo();
-  SendInput(1, &input, sizeof(INPUT));
+  InjectKey(vkCode, true);
 }
 
 void SendKeyUpImmediate(int vkCode) {
-  INPUT input = {INPUT_KEYBOARD};
-  input.ki.wVk = 0;
-  input.ki.wScan = VirtualKeyToScanCode(vkCode);
-  input.ki.dwFlags = VirtualKeyInputFlags(vkCode, false);
-  input.ki.dwExtraInfo = GetMessageExtraInfo();
-  SendInput(1, &input, sizeof(INPUT));
+  InjectKey(vkCode, false);
 }
 
 void ApplyVirtualAxisState(int &currentVk, int desiredVk) {
@@ -176,46 +167,20 @@ void PublishSpamKeysFromState(bool snapTapEnabled) {
 }
 
 void SendKeyUpForPhysicallyHeldWasd() {
-  std::vector<INPUT> keyUpInputs;
-  keyUpInputs.reserve(4);
-
   for (int key : {'W', 'A', 'S', 'D'}) {
     if (Globals::g_KeyInfo[key].physicalKeyDown.load(
             std::memory_order_relaxed)) {
-      INPUT input = {INPUT_KEYBOARD};
-      input.ki.wVk = 0;
-      input.ki.wScan = VirtualKeyToScanCode(key);
-      input.ki.dwFlags = VirtualKeyInputFlags(key, false);
-      input.ki.dwExtraInfo = GetMessageExtraInfo();
-      keyUpInputs.push_back(input);
+      InjectKey(key, false);
     }
-  }
-
-  if (!keyUpInputs.empty()) {
-    SendInput(static_cast<UINT>(keyUpInputs.size()), keyUpInputs.data(),
-              sizeof(INPUT));
   }
 }
 
 void SendKeyDownForPhysicallyHeldWasd() {
-  std::vector<INPUT> keyDownInputs;
-  keyDownInputs.reserve(4);
-
   for (int key : {'W', 'A', 'S', 'D'}) {
     if (Globals::g_KeyInfo[key].physicalKeyDown.load(
             std::memory_order_relaxed)) {
-      INPUT input = {INPUT_KEYBOARD};
-      input.ki.wVk = 0;
-      input.ki.wScan = VirtualKeyToScanCode(key);
-      input.ki.dwFlags = VirtualKeyInputFlags(key, true);
-      input.ki.dwExtraInfo = GetMessageExtraInfo();
-      keyDownInputs.push_back(input);
+      InjectKey(key, true);
     }
-  }
-
-  if (!keyDownInputs.empty()) {
-    SendInput(static_cast<UINT>(keyDownInputs.size()), keyDownInputs.data(),
-              sizeof(INPUT));
   }
 }
 

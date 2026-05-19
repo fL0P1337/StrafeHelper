@@ -146,6 +146,7 @@ bool InterceptionBackend::InjectKey(uint16_t scanCode,
   input.type = INPUT_KEYBOARD;
   input.ki.wScan = scanCode;
   input.ki.dwFlags = KEYEVENTF_SCANCODE;
+  input.ki.dwExtraInfo = NEO_SYNTHETIC_INFORMATION;
 
   if ((flags & NEO_KEY_BREAK) != 0u) {
     input.ki.dwFlags |= KEYEVENTF_KEYUP;

@@ -133,9 +133,20 @@ inline DWORD GetCurrentThreadId() { return 1; }
 // Timing
 inline int timeBeginPeriod(unsigned int period) { return 0; }
 inline int timeEndPeriod(unsigned int period) { return 0; }
-inline int QueryPerformanceFrequency(LARGE_INTEGER *lpFrequency) { lpFrequency->QuadPart = 1000000; return 1; }
-inline int QueryPerformanceCounter(LARGE_INTEGER *lpPerformanceCount) { lpPerformanceCount->QuadPart = 0; return 1; }
-inline void Sleep(DWORD dwMilliseconds) {}
+inline int QueryPerformanceFrequency(LARGE_INTEGER *lpFrequency) {
+    lpFrequency->QuadPart = 10000000; // 10MHz
+    return 1;
+}
+inline int QueryPerformanceCounter(LARGE_INTEGER *lpPerformanceCount) {
+    static const auto start = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(now - start).count();
+    lpPerformanceCount->QuadPart = elapsed / 100; // convert to 10MHz ticks
+    return 1;
+}
+inline void Sleep(DWORD dwMilliseconds) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(dwMilliseconds));
+}
 
 // MapVirtualKeyW mock
 inline unsigned int MapVirtualKeyW(unsigned int uCode, unsigned int uMapType) {
@@ -143,6 +154,9 @@ inline unsigned int MapVirtualKeyW(unsigned int uCode, unsigned int uMapType) {
         if (uCode == VK_SPACE) return 0x39;
         if (uCode == VK_LCONTROL) return 0x1D;
         if (uCode == VK_RCONTROL) return 0xE01D;
+        if (uCode == 'A') return 0x1E;
+        if (uCode == VK_ESCAPE) return 0x01;
+        if (uCode == VK_RETURN) return 0x1C;
     }
     return 0;
 }

@@ -1,7 +1,7 @@
 CXX = g++
 CXXFLAGS = -std=c++20 -I../ -I./mock -g -Wall -fpermissive -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
 
-OBJS = ../SuperglideLogic.o ../Utils.o ../Config.o stub_globals.o stub_logger.o test_SuperglideLogic.o test_Utils.o test_main.o
+OBJS = ../SuperglideLogic.o ../Utils.o ../Config.o ../Logger.o ../PrecisionTimer.o stub_globals.o test_superglide.o test_utils.o test_main.o
 
 all: test_runner
 

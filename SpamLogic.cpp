@@ -1,7 +1,9 @@
 // SpamLogic.cpp
 #include "SpamLogic.h"
+#include "PrecisionTimer.h"
 #include "Config.h"
 #include "Globals.h"
+#include "Application.h"
 #include "Utils.h"
 #include <algorithm>
 #include <chrono>
@@ -42,9 +44,7 @@ void GetSpamSnapshot(std::vector<int> &keys, unsigned long long &epoch) {
 
 void SpamThreadFunc(std::stop_token stopToken) {
   timeBeginPeriod(1);
-  LARGE_INTEGER freq;
-  QueryPerformanceFrequency(&freq);
-  const LONGLONG spinThreshold = freq.QuadPart / 2000LL; // 0.5 ms in ticks
+  PrecisionTimer timer;
 
   std::vector<int> localActiveKeys;
   localActiveKeys.reserve(8);
@@ -97,18 +97,16 @@ void SpamThreadFunc(std::stop_token stopToken) {
       g_spamCv.wait(cvLock, [&stopToken]() { return g_spamCvFlag || stopToken.stop_requested(); });
       g_spamCvFlag = false;
     } else {
-      LARGE_INTEGER start;
-      QueryPerformanceCounter(&start);
-      const LONGLONG delayTicks =
-          (static_cast<LONGLONG>(waitTimeout) * freq.QuadPart) / 1000LL;
-      const LONGLONG targetTick = start.QuadPart + delayTicks;
+      const LONGLONG start = PrecisionTimer::GetCurrentTicks();
+      const LONGLONG targetTick = start + timer.MsToTicks(waitTimeout);
+      const LONGLONG spinThreshold = timer.MsToTicks(0.5);
 
-      LARGE_INTEGER now;
+      LONGLONG now;
       do {
-        QueryPerformanceCounter(&now);
+        now = PrecisionTimer::GetCurrentTicks();
         if (stopToken.stop_requested())
           break;
-        const LONGLONG remaining = targetTick - now.QuadPart;
+        const LONGLONG remaining = targetTick - now;
         if (remaining > spinThreshold) {
           std::unique_lock<std::mutex> cvLock(g_spamCvMtx);
           if (g_spamCv.wait_for(cvLock, std::chrono::milliseconds(1), []() { return g_spamCvFlag; })) {
@@ -122,7 +120,7 @@ void SpamThreadFunc(std::stop_token stopToken) {
             break;
           }
         }
-      } while (now.QuadPart < targetTick);
+      } while (now < targetTick);
     }
 
     if (stopToken.stop_requested()) {
@@ -150,27 +148,10 @@ void SpamThreadFunc(std::stop_token stopToken) {
     DWORD keyDownDuration = ApplyJitter(
         Config::SpamKeyDownDurationMs.load(std::memory_order_relaxed));
     if (keyDownDuration > 0) {
-      LARGE_INTEGER start;
-      QueryPerformanceCounter(&start);
-      const LONGLONG durationTicks =
-          (static_cast<LONGLONG>(keyDownDuration) * freq.QuadPart) / 1000LL;
-      const LONGLONG targetTick = start.QuadPart + durationTicks;
-
-      LARGE_INTEGER now;
-      do {
-        QueryPerformanceCounter(&now);
-        if (stopToken.stop_requested()) {
-          releaseVirtuallyDownKeys(false);
-          break;
-        }
-        const LONGLONG remaining = targetTick - now.QuadPart;
-        if (remaining > spinThreshold) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-      } while (now.QuadPart < targetTick);
-
-      if (stopToken.stop_requested())
+      if (!timer.PreciseSleep(keyDownDuration, stopToken)) {
+        releaseVirtuallyDownKeys(false);
         break;
+      }
     }
 
     shouldBeActive = Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
@@ -203,23 +184,8 @@ void SpamThreadFunc(std::stop_token stopToken) {
 } // namespace
 
 void SendKeyInputBatch(const std::vector<int> &keys, bool keyDown) {
-  if (keys.empty())
-    return;
-
-  std::vector<INPUT> inputs(keys.size());
-  for (size_t i = 0; i < keys.size(); ++i) {
-    inputs[i].type = INPUT_KEYBOARD;
-    inputs[i].ki.wVk = 0;
-    inputs[i].ki.wScan = VirtualKeyToScanCode(keys[i]);
-    inputs[i].ki.dwFlags = VirtualKeyInputFlags(keys[i], keyDown);
-    inputs[i].ki.time = 0;
-    inputs[i].ki.dwExtraInfo = GetMessageExtraInfo();
-  }
-  UINT sent =
-      SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
-  if (sent != inputs.size()) {
-    std::cerr << "Warning: SendInput sent " << sent << "/" << inputs.size()
-              << " events. Error: " << GetLastError() << std::endl;
+  for (int key : keys) {
+    InjectKey(key, keyDown);
   }
 }
 
