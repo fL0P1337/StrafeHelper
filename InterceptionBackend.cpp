@@ -69,8 +69,15 @@ bool InterceptionBackend::Initialize() noexcept {
     return false;
   }
 
-  status_ = {};
-  status_.driverActive = true;
+  {
+    std::lock_guard<std::mutex> lock(statusMutex_);
+    status_ = {};
+    status_.driverActive = true;
+  }
+
+  running_.store(true, std::memory_order_relaxed);
+  thread_ = std::thread([this]() { ThreadMain(); });
+
   initialized_ = true;
 
   Logger::GetInstance().Log(
@@ -80,12 +87,23 @@ bool InterceptionBackend::Initialize() noexcept {
 }
 
 void InterceptionBackend::Shutdown() noexcept {
+  if (running_.load(std::memory_order_relaxed)) {
+    running_.store(false, std::memory_order_relaxed);
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
   initialized_ = false;
-  pendingDevice_ = 0;
   lastKeyboardDevice_ = 0;
   sequenceCounter_ = 0;
   keyboardDevices_.clear();
-  status_ = {};
+  callback_ = nullptr;
+
+  {
+    std::lock_guard<std::mutex> lock(statusMutex_);
+    status_ = {};
+  }
 
   if (context_ && interceptionDestroyContext_) {
     interceptionDestroyContext_(context_);
@@ -102,6 +120,7 @@ void InterceptionBackend::Shutdown() noexcept {
   interceptionGetHardwareId_ = nullptr;
   interceptionIsInvalid_ = nullptr;
   interceptionIsKeyboard_ = nullptr;
+  interceptionIsMouse_ = nullptr;
 
   if (interceptionLib_) {
     FreeLibrary(interceptionLib_);
@@ -109,55 +128,8 @@ void InterceptionBackend::Shutdown() noexcept {
   }
 }
 
-uint32_t InterceptionBackend::PollEvents(NEO_KEY_EVENT *out,
-                                         uint32_t maxCount) noexcept {
-  if (!initialized_ || !out || maxCount == 0) {
-    return 0;
-  }
-
-  uint32_t totalRead = 0;
-
-  if (pendingDevice_ > 0) {
-    totalRead += DrainKeyboardDevice(pendingDevice_, out + totalRead,
-                                     maxCount - totalRead);
-    pendingDevice_ = 0;
-  }
-
-  while (totalRead < maxCount) {
-    const InterceptionDevice device = WaitDevice(0);
-    if (device <= 0) {
-      break;
-    }
-
-    if (!interceptionIsKeyboard_(device)) {
-      DrainNonKeyboardDevice(device);
-      continue;
-    }
-
-    const uint32_t readNow =
-        DrainKeyboardDevice(device, out + totalRead, maxCount - totalRead);
-    if (readNow == 0) {
-      break;
-    }
-    totalRead += readNow;
-  }
-
-  return totalRead;
-}
-
-bool InterceptionBackend::PassThrough(const NEO_KEY_EVENT &event) noexcept {
-  if (!initialized_ || !context_) {
-    return false;
-  }
-  if (event.sourceDevice <= 0) {
-    return false;
-  }
-
-  InterceptionKeyStroke stroke{};
-  stroke.code = event.scanCode;
-  stroke.state = event.nativeState;
-  stroke.information = event.nativeInformation;
-  return SendOnDevice(event.sourceDevice, stroke, false);
+void InterceptionBackend::SetCallback(EventCallback cb) noexcept {
+  callback_ = cb;
 }
 
 bool InterceptionBackend::InjectKey(uint16_t scanCode,
@@ -181,45 +153,87 @@ bool InterceptionBackend::InjectKey(uint16_t scanCode,
   if ((flags & NEO_KEY_E0) != 0u) {
     input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
   }
-  // Note: E1 prefix (e.g. Pause/Break) is not supported by SendInput's
-  // KEYEVENTF flags. E1 keys are never used for WASD movement.
 
   const UINT sent = SendInput(1, &input, sizeof(INPUT));
   if (sent != 1) {
     return false;
   }
 
-  status_.eventsInjected = ClampAddLong(status_.eventsInjected, 1);
+  {
+    std::lock_guard<std::mutex> lock(statusMutex_);
+    status_.eventsInjected = ClampAddLong(status_.eventsInjected, 1);
+  }
   return true;
-}
-
-void InterceptionBackend::WaitForData(uint32_t timeoutMs) noexcept {
-  if (!initialized_ || pendingDevice_ > 0) {
-    return;
-  }
-
-  const InterceptionDevice device = WaitDevice(timeoutMs);
-  if (device <= 0) {
-    return;
-  }
-
-  if (!interceptionIsKeyboard_(device)) {
-    DrainNonKeyboardDevice(device);
-    return;
-  }
-
-  pendingDevice_ = device;
-  lastKeyboardDevice_ = device;
 }
 
 bool InterceptionBackend::GetStatus(BackendStatus &out) noexcept {
-  if (!initialized_) {
-    return false;
-  }
-
+  std::lock_guard<std::mutex> lock(statusMutex_);
   status_.driverActive = context_ != nullptr;
   out = status_;
   return true;
+}
+
+void InterceptionBackend::ThreadMain() noexcept {
+  constexpr uint32_t kPollTimeoutMs = 10;
+  std::array<InterceptionStroke, kStrokeBatch> strokes{};
+
+  while (running_.load(std::memory_order_relaxed)) {
+    const InterceptionDevice device = WaitDevice(kPollTimeoutMs);
+    if (device <= 0) {
+      continue;
+    }
+
+    if (!interceptionIsKeyboard_(device)) {
+      DrainNonKeyboardDevice(device);
+      continue;
+    }
+
+    const int received = interceptionReceive_(context_, device, strokes.data(), kStrokeBatch);
+    if (received <= 0) {
+      continue;
+    }
+
+    for (int i = 0; i < received; ++i) {
+      const auto *keyStroke = reinterpret_cast<const InterceptionKeyStroke *>(&strokes[static_cast<size_t>(i)]);
+
+      uint16_t neoFlags = NEO_KEY_MAKE;
+      if ((keyStroke->state & static_cast<uint16_t>(INTERCEPTION_KEY_UP)) != 0u) {
+        neoFlags |= NEO_KEY_BREAK;
+      }
+      if ((keyStroke->state & static_cast<uint16_t>(INTERCEPTION_KEY_E0)) != 0u) {
+        neoFlags |= NEO_KEY_E0;
+      }
+      if ((keyStroke->state & static_cast<uint16_t>(INTERCEPTION_KEY_E1)) != 0u) {
+        neoFlags |= NEO_KEY_E1;
+      }
+
+      NEO_KEY_EVENT evt{};
+      evt.scanCode = keyStroke->code;
+      evt.flags = neoFlags;
+      evt.sequence = ++sequenceCounter_;
+      evt.timestampQpc = QueryQpc();
+      evt.sourceDevice = device;
+      evt.nativeState = keyStroke->state;
+      evt.nativeInformation = keyStroke->information;
+
+      {
+        std::lock_guard<std::mutex> lock(statusMutex_);
+        status_.eventsCaptured = ClampAddLong(status_.eventsCaptured, 1);
+      }
+
+      bool suppress = false;
+      if (callback_) {
+        suppress = callback_(evt);
+      }
+
+      if (suppress) {
+        std::lock_guard<std::mutex> lock(statusMutex_);
+        status_.eventsDropped = ClampAddLong(status_.eventsDropped, 1);
+      } else {
+        (void)SendOnDevice(device, *keyStroke, false);
+      }
+    }
+  }
 }
 
 bool InterceptionBackend::ResolveApi() noexcept {
@@ -317,63 +331,6 @@ InterceptionBackend::WaitDevice(uint32_t timeoutMs) noexcept {
   return device;
 }
 
-uint32_t InterceptionBackend::DrainKeyboardDevice(InterceptionDevice device,
-                                                  NEO_KEY_EVENT *out,
-                                                  uint32_t maxCount) noexcept {
-  if (!context_ || !out || maxCount == 0) {
-    return 0;
-  }
-
-  uint32_t produced = 0;
-  std::array<InterceptionStroke, kStrokeBatch> strokes{};
-  while (produced < maxCount) {
-    const unsigned int request = static_cast<unsigned int>(std::min<uint32_t>(
-        maxCount - produced, static_cast<uint32_t>(kStrokeBatch)));
-    const int received =
-        interceptionReceive_(context_, device, strokes.data(), request);
-    if (received <= 0) {
-      break;
-    }
-
-    for (int i = 0; i < received && produced < maxCount; ++i) {
-      const auto *keyStroke = reinterpret_cast<const InterceptionKeyStroke *>(
-          &strokes[static_cast<size_t>(i)]);
-
-      uint16_t neoFlags = NEO_KEY_MAKE;
-      if ((keyStroke->state & static_cast<uint16_t>(INTERCEPTION_KEY_UP)) !=
-          0u) {
-        neoFlags |= NEO_KEY_BREAK;
-      }
-      if ((keyStroke->state & static_cast<uint16_t>(INTERCEPTION_KEY_E0)) !=
-          0u) {
-        neoFlags |= NEO_KEY_E0;
-      }
-      if ((keyStroke->state & static_cast<uint16_t>(INTERCEPTION_KEY_E1)) !=
-          0u) {
-        neoFlags |= NEO_KEY_E1;
-      }
-
-      out[produced].scanCode = keyStroke->code;
-      out[produced].flags = neoFlags;
-      out[produced].sequence = ++sequenceCounter_;
-      out[produced].timestampQpc = QueryQpc();
-      out[produced].sourceDevice = device;
-      out[produced].nativeState = keyStroke->state;
-      out[produced].nativeInformation = keyStroke->information;
-      ++produced;
-    }
-
-    if (received < static_cast<int>(request)) {
-      break;
-    }
-  }
-
-  lastKeyboardDevice_ = device;
-  status_.eventsCaptured =
-      ClampAddLong(status_.eventsCaptured, static_cast<long>(produced));
-  return produced;
-}
-
 void InterceptionBackend::DrainNonKeyboardDevice(
     InterceptionDevice device) noexcept {
   if (!context_) {
@@ -412,6 +369,7 @@ bool InterceptionBackend::SendOnDevice(InterceptionDevice device,
   }
 
   if (countInjected) {
+    std::lock_guard<std::mutex> lock(statusMutex_);
     status_.eventsInjected = ClampAddLong(status_.eventsInjected, 1);
   }
   return true;

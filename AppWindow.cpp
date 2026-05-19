@@ -48,8 +48,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     break;
 
   case WM_DESTROY:
-    std::cout << "WM_DESTROY received. Cleaning up application..." << std::endl;
-    CleanupApplication();
+    std::cout << "WM_DESTROY received." << std::endl;
     PostQuitMessage(0);
     break;
 
@@ -104,5 +103,6 @@ bool CreateAppWindow(HINSTANCE hInstance) {
 void DestroyAppWindow() {
   if (Globals::g_hWindow) {            // Globals::
     DestroyWindow(Globals::g_hWindow); // Globals::
+    Globals::g_hWindow = NULL;
   }
 }

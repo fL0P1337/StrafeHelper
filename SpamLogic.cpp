@@ -5,7 +5,9 @@
 #include "Utils.h"
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <iostream>
+#include <mutex>
 #include <random>
 #include <thread>
 #include <timeapi.h>
@@ -14,7 +16,10 @@
 #pragma comment(lib, "winmm.lib")
 
 namespace {
-std::atomic<bool> g_stopSpamThreadRequest = false;
+std::jthread g_spamThread;
+std::mutex g_spamCvMtx;
+std::condition_variable g_spamCv;
+bool g_spamCvFlag = false;
 
 bool IsPhysicallyHeldMovementKey(int vkCode) {
   if (vkCode != 'W' && vkCode != 'A' && vkCode != 'S' && vkCode != 'D') {
@@ -30,14 +35,12 @@ bool IsPhysicallyHeldMovementKey(int vkCode) {
 }
 
 void GetSpamSnapshot(std::vector<int> &keys, unsigned long long &epoch) {
-  EnterCriticalSection(&Globals::g_csActiveKeys);
+  std::lock_guard<std::mutex> lock(Globals::g_activeKeysMutex);
   keys = Globals::g_activeSpamKeys;
   epoch = Globals::g_spamKeysEpoch.load(std::memory_order_relaxed);
-  LeaveCriticalSection(&Globals::g_csActiveKeys);
 }
-} // namespace
 
-DWORD WINAPI SpamThread(LPVOID lpParam) {
+void SpamThreadFunc(std::stop_token stopToken) {
   timeBeginPeriod(1);
   LARGE_INTEGER freq;
   QueryPerformanceFrequency(&freq);
@@ -71,7 +74,7 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
     virtuallyDownKeys.clear();
   };
 
-  while (!g_stopSpamThreadRequest.load(std::memory_order_relaxed)) {
+  while (!stopToken.stop_requested()) {
     DWORD spamDelay = Config::SpamDelayMs.load(std::memory_order_relaxed);
     DWORD waitTimeout = INFINITE;
 
@@ -90,7 +93,9 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
     }
 
     if (waitTimeout == INFINITE) {
-      WaitForSingleObject(Globals::g_hSpamEvent, INFINITE);
+      std::unique_lock<std::mutex> cvLock(g_spamCvMtx);
+      g_spamCv.wait(cvLock, [&stopToken]() { return g_spamCvFlag || stopToken.stop_requested(); });
+      g_spamCvFlag = false;
     } else {
       LARGE_INTEGER start;
       QueryPerformanceCounter(&start);
@@ -101,20 +106,26 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
       LARGE_INTEGER now;
       do {
         QueryPerformanceCounter(&now);
-        if (g_stopSpamThreadRequest.load(std::memory_order_relaxed))
+        if (stopToken.stop_requested())
           break;
         const LONGLONG remaining = targetTick - now.QuadPart;
         if (remaining > spinThreshold) {
-          if (WaitForSingleObject(Globals::g_hSpamEvent, 1) == WAIT_OBJECT_0)
+          std::unique_lock<std::mutex> cvLock(g_spamCvMtx);
+          if (g_spamCv.wait_for(cvLock, std::chrono::milliseconds(1), []() { return g_spamCvFlag; })) {
+            g_spamCvFlag = false;
             break;
+          }
         } else if (remaining > 0) {
-          if (WaitForSingleObject(Globals::g_hSpamEvent, 0) == WAIT_OBJECT_0)
+          std::unique_lock<std::mutex> cvLock(g_spamCvMtx);
+          if (g_spamCv.wait_for(cvLock, std::chrono::microseconds(0), []() { return g_spamCvFlag; })) {
+            g_spamCvFlag = false;
             break;
+          }
         }
       } while (now.QuadPart < targetTick);
     }
 
-    if (g_stopSpamThreadRequest.load(std::memory_order_relaxed)) {
+    if (stopToken.stop_requested()) {
       releaseVirtuallyDownKeys(false);
       break;
     }
@@ -148,17 +159,17 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
       LARGE_INTEGER now;
       do {
         QueryPerformanceCounter(&now);
-        if (g_stopSpamThreadRequest.load(std::memory_order_relaxed)) {
+        if (stopToken.stop_requested()) {
           releaseVirtuallyDownKeys(false);
           break;
         }
         const LONGLONG remaining = targetTick - now.QuadPart;
         if (remaining > spinThreshold) {
-          Sleep(1);
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
       } while (now.QuadPart < targetTick);
 
-      if (g_stopSpamThreadRequest.load(std::memory_order_relaxed))
+      if (stopToken.stop_requested())
         break;
     }
 
@@ -188,8 +199,8 @@ DWORD WINAPI SpamThread(LPVOID lpParam) {
 
   timeEndPeriod(1);
   std::cout << "Spam thread exiting." << std::endl;
-  return 0;
 }
+} // namespace
 
 void SendKeyInputBatch(const std::vector<int> &keys, bool keyDown) {
   if (keys.empty())
@@ -213,7 +224,7 @@ void SendKeyInputBatch(const std::vector<int> &keys, bool keyDown) {
 }
 
 void CleanupSpamState(bool restoreHeldKeys) {
-  Globals::g_isCSpamActive.store(false, std::memory_order_relaxed); // Globals::
+  Globals::g_isCSpamActive.store(false, std::memory_order_relaxed);
 
   std::vector<int> keysThatWereSpamming;
   std::vector<int> keysToRelease;
@@ -221,17 +232,16 @@ void CleanupSpamState(bool restoreHeldKeys) {
   std::vector<int> keysToRestoreDown;
   physicallyHeldKeys.reserve(4);
 
-  EnterCriticalSection(&Globals::g_csActiveKeys);   // Globals::
-  keysThatWereSpamming = Globals::g_activeSpamKeys; // Globals::
-  Globals::g_activeSpamKeys.clear();                // Globals::
-  Globals::g_spamKeysEpoch.fetch_add(1ULL, std::memory_order_relaxed);
-  LeaveCriticalSection(&Globals::g_csActiveKeys); // Globals::
+  {
+    std::lock_guard<std::mutex> lock(Globals::g_activeKeysMutex);
+    keysThatWereSpamming = Globals::g_activeSpamKeys;
+    Globals::g_activeSpamKeys.clear();
+    Globals::g_spamKeysEpoch.fetch_add(1ULL, std::memory_order_relaxed);
+  }
 
   for (int key : {'W', 'A', 'S', 'D'}) {
-    // --- Re-add KeyState& declaration ---
-    Globals::KeyState &state = Globals::g_KeyInfo[key]; // Globals:: (both)
-    // ---
-    state.spamming.store(false, std::memory_order_relaxed); // Use variable
+    Globals::KeyState &state = Globals::g_KeyInfo[key];
+    state.spamming.store(false, std::memory_order_relaxed);
     const bool physicallyHeld =
         state.physicalKeyDown.load(std::memory_order_relaxed);
     if (physicallyHeld) {
@@ -265,37 +275,30 @@ void CleanupSpamState(bool restoreHeldKeys) {
     std::cout << std::endl;
   }
 
-  if (Globals::g_hSpamEvent) {       // Globals::
-    SetEvent(Globals::g_hSpamEvent); // Globals::
-  }
+  TriggerSpamEvent();
 }
 
 bool StartSpamThread() {
-  g_stopSpamThreadRequest.store(false);
-  // Use Globals:: prefix
-  Globals::g_hSpamThread = CreateThread(NULL, 0, SpamThread, NULL, 0, NULL);
-  if (!Globals::g_hSpamThread) { // Globals::
-    LogError("CreateThread for SpamThread failed");
-    return false;
-  }
+  StopSpamThread();
+  g_spamThread = std::jthread(SpamThreadFunc);
   std::cout << "Spam thread started." << std::endl;
   return true;
 }
 
 void StopSpamThread() {
-  if (Globals::g_hSpamThread) { // Globals::
+  if (g_spamThread.joinable()) {
     std::cout << "Requesting spam thread stop..." << std::endl;
-    g_stopSpamThreadRequest.store(true);
-
-    if (Globals::g_hSpamEvent) {       // Globals::
-      SetEvent(Globals::g_hSpamEvent); // Globals::
-    }
-
-    WaitForSingleObject(Globals::g_hSpamThread, 1000); // Globals::
-
-    CloseHandle(Globals::g_hSpamThread); // Globals::
-    Globals::g_hSpamThread = NULL;       // Globals::
-    std::cout << "Spam thread stopped and handle closed." << std::endl;
+    g_spamThread.request_stop();
+    TriggerSpamEvent();
+    g_spamThread.join();
+    std::cout << "Spam thread stopped." << std::endl;
   }
-  g_stopSpamThreadRequest.store(false);
+}
+
+void TriggerSpamEvent() noexcept {
+  {
+    std::lock_guard<std::mutex> lock(g_spamCvMtx);
+    g_spamCvFlag = true;
+  }
+  g_spamCv.notify_all();
 }

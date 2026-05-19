@@ -81,6 +81,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -98,6 +99,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -113,6 +115,7 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>$(CoreLibraryDependencies);%(AdditionalDependencies);user32.lib;d3d11.lib;d3dcompiler.lib</AdditionalDependencies>
+      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -132,6 +135,7 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>%(AdditionalDependencies);user32.lib;d3d11.lib;d3dcompiler.lib</AdditionalDependencies>
+      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -146,7 +150,7 @@
     <ClInclude Include="InputBackend.h" />
     <ClInclude Include="InterceptionBackend.h" />
     <ClInclude Include="KbdHookBackend.h" />
-    <ClInclude Include="KeyboardHook.h" />
+    <ClInclude Include="MovementStateManager.h" />
     <ClInclude Include="KeybindManager.h" />
     <ClInclude Include="SpamLogic.h" />
     <ClInclude Include="SuperglideLogic.h" />
@@ -169,7 +173,7 @@
     <ClCompile Include="Config.cpp" />
     <ClCompile Include="InterceptionBackend.cpp" />
     <ClCompile Include="KbdHookBackend.cpp" />
-    <ClCompile Include="KeyboardHook.cpp" />
+    <ClCompile Include="MovementStateManager.cpp" />
     <ClCompile Include="KeybindManager.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="SpamLogic.cpp" />

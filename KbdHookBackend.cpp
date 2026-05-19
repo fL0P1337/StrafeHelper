@@ -34,7 +34,7 @@ bool KbdHookBackend::Initialize() noexcept {
   }
 
   {
-    std::lock_guard<std::mutex> qLock(queueMutex_);
+    std::lock_guard<std::mutex> sLock(statusMutex_);
     status_ = {};
     status_.driverActive = true;
   }
@@ -49,41 +49,25 @@ void KbdHookBackend::Shutdown() noexcept {
   if (tid != 0) {
     (void)PostThreadMessageW(tid, WM_QUIT, 0, 0);
   }
-  queueCv_.notify_all();
 
   if (thread_.joinable()) {
     thread_.join();
   }
 
   {
-    std::lock_guard<std::mutex> lock(queueMutex_);
-    queue_.clear();
+    std::lock_guard<std::mutex> lock(statusMutex_);
     status_.driverActive = false;
   }
 
   threadId_.store(0, std::memory_order_relaxed);
+  callback_ = nullptr;
   if (instance_ == this) {
     instance_ = nullptr;
   }
 }
 
-uint32_t KbdHookBackend::PollEvents(NEO_KEY_EVENT *out,
-                                    uint32_t maxCount) noexcept {
-  if (!out || maxCount == 0) {
-    return 0;
-  }
-
-  std::lock_guard<std::mutex> lock(queueMutex_);
-  uint32_t count = 0;
-  while (!queue_.empty() && count < maxCount) {
-    out[count++] = queue_.front();
-    queue_.pop_front();
-  }
-  return count;
-}
-
-bool KbdHookBackend::PassThrough(const NEO_KEY_EVENT &) noexcept {
-  return true;
+void KbdHookBackend::SetCallback(EventCallback cb) noexcept {
+  callback_ = cb;
 }
 
 bool KbdHookBackend::InjectKey(uint16_t scanCode, uint16_t flags) noexcept {
@@ -105,29 +89,15 @@ bool KbdHookBackend::InjectKey(uint16_t scanCode, uint16_t flags) noexcept {
     return false;
   }
 
-  std::lock_guard<std::mutex> lock(queueMutex_);
-  ++status_.eventsInjected;
+  {
+    std::lock_guard<std::mutex> lock(statusMutex_);
+    ++status_.eventsInjected;
+  }
   return true;
 }
 
-void KbdHookBackend::WaitForData(uint32_t timeoutMs) noexcept {
-  std::unique_lock<std::mutex> lock(queueMutex_);
-  if (!queue_.empty()) {
-    return;
-  }
-
-  if (timeoutMs == INFINITE) {
-    queueCv_.wait(lock, [&]() { return !queue_.empty() || !running_.load(); });
-    return;
-  }
-
-  (void)queueCv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&]() {
-    return !queue_.empty() || !running_.load();
-  });
-}
-
 bool KbdHookBackend::GetStatus(BackendStatus &out) noexcept {
-  std::lock_guard<std::mutex> lock(queueMutex_);
+  std::lock_guard<std::mutex> lock(statusMutex_);
   out = status_;
   out.driverActive = running_.load(std::memory_order_relaxed);
   return true;
@@ -176,7 +146,22 @@ LRESULT CALLBACK KbdHookBackend::HookProc(int nCode, WPARAM wParam,
   evt.nativeState = 0;
   evt.nativeInformation = static_cast<uint32_t>(kbd->dwExtraInfo);
 
-  instance_->PushEvent(evt);
+  {
+    std::lock_guard<std::mutex> lock(instance_->statusMutex_);
+    ++instance_->status_.eventsCaptured;
+  }
+
+  if (instance_->callback_) {
+    const bool suppress = instance_->callback_(evt);
+    if (suppress) {
+      {
+        std::lock_guard<std::mutex> lock(instance_->statusMutex_);
+        ++instance_->status_.eventsDropped;
+      }
+      return 1; // Suppress event from reaching the rest of OS hook chain
+    }
+  }
+
   return CallNextHookEx(nullptr, nCode, wParam, lParam);
 }
 
@@ -205,13 +190,6 @@ void KbdHookBackend::ThreadMain() noexcept {
   UnhookWindowsHookEx(hook_);
   hook_ = nullptr;
   threadId_.store(0, std::memory_order_relaxed);
-}
-
-void KbdHookBackend::PushEvent(const NEO_KEY_EVENT &evt) noexcept {
-  std::lock_guard<std::mutex> lock(queueMutex_);
-  queue_.push_back(evt);
-  ++status_.eventsCaptured;
-  queueCv_.notify_one();
 }
 
 int64_t KbdHookBackend::QueryQpc() noexcept {

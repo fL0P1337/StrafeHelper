@@ -21,14 +21,11 @@ public:
 
   [[nodiscard]] bool Initialize() noexcept override;
   void Shutdown() noexcept override;
+  void SetCallback(EventCallback cb) noexcept override;
 
-  [[nodiscard]] uint32_t PollEvents(NEO_KEY_EVENT *out,
-                                    uint32_t maxCount) noexcept override;
-  [[nodiscard]] bool PassThrough(const NEO_KEY_EVENT &event) noexcept override;
   [[nodiscard]] bool InjectKey(uint16_t scanCode,
                                uint16_t flags) noexcept override;
 
-  void WaitForData(uint32_t timeoutMs) noexcept override;
   [[nodiscard]] bool GetStatus(BackendStatus &out) noexcept override;
 
   [[nodiscard]] const char *Name() const noexcept override {
@@ -36,7 +33,7 @@ public:
   }
 
   [[nodiscard]] bool CanSuppressPhysical() const noexcept override {
-    return false;
+    return true;
   }
 
 private:
@@ -50,7 +47,6 @@ private:
   static LRESULT CALLBACK HookProc(int nCode, WPARAM wParam,
                                    LPARAM lParam) noexcept;
   void ThreadMain() noexcept;
-  void PushEvent(const NEO_KEY_EVENT &evt) noexcept;
   [[nodiscard]] static int64_t QueryQpc() noexcept;
 
 private:
@@ -61,10 +57,8 @@ private:
   std::atomic<bool> running_{false};
   std::atomic<DWORD> threadId_{0};
 
-  std::mutex queueMutex_;
-  std::condition_variable queueCv_;
-  std::deque<NEO_KEY_EVENT> queue_{};
-
+  EventCallback callback_ = nullptr;
+  std::mutex statusMutex_;
   std::atomic<uint32_t> sequenceCounter_{0};
   BackendStatus status_{};
 

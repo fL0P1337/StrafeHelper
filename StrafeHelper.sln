@@ -5,6 +5,8 @@ VisualStudioVersion = 17.12.35707.178 d17.12
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "StrafeHelper", "StrafeHelper.vcxproj", "{81EC9DB9-B301-4C0E-9AEC-160D597EA6F3}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "StrafeHelperTests", "tests\StrafeHelperTests.vcxproj", "{92FD58A8-1E4E-4CD5-8422-B83F415D4036}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -21,6 +23,10 @@ Global
 		{81EC9DB9-B301-4C0E-9AEC-160D597EA6F3}.Release|x64.Build.0 = Release|x64
 		{81EC9DB9-B301-4C0E-9AEC-160D597EA6F3}.Release|x86.ActiveCfg = Release|Win32
 		{81EC9DB9-B301-4C0E-9AEC-160D597EA6F3}.Release|x86.Build.0 = Release|Win32
+		{92FD58A8-1E4E-4CD5-8422-B83F415D4036}.Debug|x64.ActiveCfg = Debug|x64
+		{92FD58A8-1E4E-4CD5-8422-B83F415D4036}.Debug|x64.Build.0 = Debug|x64
+		{92FD58A8-1E4E-4CD5-8422-B83F415D4036}.Release|x64.ActiveCfg = Release|x64
+		{92FD58A8-1E4E-4CD5-8422-B83F415D4036}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -7,6 +7,9 @@
 #include "InputBackend.h"
 
 #include <vector>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -22,18 +25,19 @@ public:
 
   [[nodiscard]] bool Initialize() noexcept override;
   void Shutdown() noexcept override;
+  void SetCallback(EventCallback cb) noexcept override;
 
-  [[nodiscard]] uint32_t PollEvents(NEO_KEY_EVENT *out,
-                                    uint32_t maxCount) noexcept override;
-  [[nodiscard]] bool PassThrough(const NEO_KEY_EVENT &event) noexcept override;
   [[nodiscard]] bool InjectKey(uint16_t scanCode,
                                uint16_t flags) noexcept override;
 
-  void WaitForData(uint32_t timeoutMs) noexcept override;
   [[nodiscard]] bool GetStatus(BackendStatus &out) noexcept override;
 
   [[nodiscard]] const char *Name() const noexcept override {
     return "InterceptionBackend";
+  }
+
+  [[nodiscard]] bool CanSuppressPhysical() const noexcept override {
+    return true;
   }
 
 private:
@@ -52,13 +56,11 @@ private:
   [[nodiscard]] bool ResolveApi() noexcept;
   [[nodiscard]] bool EnumerateKeyboards() noexcept;
   [[nodiscard]] InterceptionDevice WaitDevice(uint32_t timeoutMs) noexcept;
-  [[nodiscard]] uint32_t DrainKeyboardDevice(InterceptionDevice device,
-                                             NEO_KEY_EVENT *out,
-                                             uint32_t maxCount) noexcept;
   void DrainNonKeyboardDevice(InterceptionDevice device) noexcept;
   [[nodiscard]] bool SendOnDevice(InterceptionDevice device,
                                   const InterceptionKeyStroke &stroke,
                                   bool countInjected) noexcept;
+  void ThreadMain() noexcept;
 
 private:
   HMODULE interceptionLib_ = nullptr;
@@ -77,8 +79,13 @@ private:
 
   InterceptionContext context_ = nullptr;
   std::vector<InterceptionDevice> keyboardDevices_{};
-  InterceptionDevice pendingDevice_ = 0;
   InterceptionDevice lastKeyboardDevice_ = 0;
+  
+  std::thread thread_;
+  std::atomic<bool> running_{false};
+  EventCallback callback_ = nullptr;
+  std::mutex statusMutex_;
+  
   uint32_t sequenceCounter_ = 0;
   BackendStatus status_{};
   bool initialized_ = false;

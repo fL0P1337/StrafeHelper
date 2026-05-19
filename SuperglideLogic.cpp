@@ -18,6 +18,7 @@
 #include <condition_variable>
 #include <iostream>
 #include <mutex>
+#include <thread>
 #include <timeapi.h> // timeBeginPeriod / timeEndPeriod
 #include <windows.h>
 
@@ -29,9 +30,10 @@ namespace {
 constexpr int kJumpVK = VK_SPACE;      // Jump
 constexpr int kCrouchVK = VK_LCONTROL; // Crouch (left Ctrl)
 
-std::atomic<bool> g_stopSuperglideRequest{false};
+std::jthread g_superglideThread;
 std::mutex g_superglideCvMtx;
 std::condition_variable g_superglideCv;
+bool g_superglideCvFlag = false;
 
 // Injects a single key tap (down then up) using KEYEVENTF_SCANCODE.
 // Matches the injection style used throughout the rest of the codebase.
@@ -51,7 +53,7 @@ static void InjectKeyTap(int vk) noexcept {
   SendInput(2, inputs, sizeof(INPUT));
 }
 
-DWORD WINAPI SuperglideThread(LPVOID) {
+void SuperglideThreadFunc(std::stop_token stopToken) {
   // Raise timer resolution to ~1 ms so Sleep is accurate enough for
   // sub-frame timing at high frame rates.
   timeBeginPeriod(1);
@@ -60,10 +62,14 @@ DWORD WINAPI SuperglideThread(LPVOID) {
   LARGE_INTEGER freq;
   QueryPerformanceFrequency(&freq);
 
-  while (!g_stopSuperglideRequest.load(std::memory_order_relaxed)) {
-    WaitForSingleObject(Globals::g_hSuperglideEvent, INFINITE);
+  while (!stopToken.stop_requested()) {
+    {
+      std::unique_lock<std::mutex> cvLock(g_superglideCvMtx);
+      g_superglideCv.wait(cvLock, [&stopToken]() { return g_superglideCvFlag || stopToken.stop_requested(); });
+      g_superglideCvFlag = false;
+    }
 
-    if (g_stopSuperglideRequest.load(std::memory_order_relaxed))
+    if (stopToken.stop_requested())
       break;
 
     if (!Config::EnableSuperglide.load(std::memory_order_relaxed))
@@ -95,11 +101,11 @@ DWORD WINAPI SuperglideThread(LPVOID) {
       QueryPerformanceCounter(&now);
       const LONGLONG remaining = targetTick - now.QuadPart;
       if (remaining > spinThreshold) {
-        Sleep(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     } while (now.QuadPart < targetTick);
 
-    if (g_stopSuperglideRequest.load(std::memory_order_relaxed))
+    if (stopToken.stop_requested())
       break;
 
     // 3. Crouch tap — fires at exactly 1 frame after Jump.
@@ -133,17 +139,17 @@ DWORD WINAPI SuperglideThread(LPVOID) {
       stats.count.fetch_add(1, std::memory_order_relaxed);
     }
 
+    // Cooldown/delay to prevent double-activation
     {
-      std::unique_lock<std::mutex> lock(g_superglideCvMtx);
-      g_superglideCv.wait_for(lock, std::chrono::milliseconds(500), [] {
-        return g_stopSuperglideRequest.load(std::memory_order_relaxed);
+      std::unique_lock<std::mutex> cvLock(g_superglideCvMtx);
+      g_superglideCv.wait_for(cvLock, std::chrono::milliseconds(500), [&stopToken]() {
+        return stopToken.stop_requested();
       });
     }
   }
 
   timeEndPeriod(1);
   std::cout << "Superglide thread exiting." << std::endl;
-  return 0;
 }
 
 } // namespace
@@ -151,29 +157,26 @@ DWORD WINAPI SuperglideThread(LPVOID) {
 // ---- Public API ----
 
 bool StartSuperglideThread() {
-  g_stopSuperglideRequest.store(false);
-  Globals::g_hSuperglideThread =
-      CreateThread(NULL, 0, SuperglideThread, NULL, 0, NULL);
-  if (!Globals::g_hSuperglideThread) {
-    LogError("CreateThread for SuperglideThread failed");
-    return false;
-  }
+  StopSuperglideThread();
+  g_superglideThread = std::jthread(SuperglideThreadFunc);
   std::cout << "Superglide thread started." << std::endl;
   return true;
 }
 
 void StopSuperglideThread() {
-  if (Globals::g_hSuperglideThread) {
+  if (g_superglideThread.joinable()) {
     std::cout << "Requesting Superglide thread stop..." << std::endl;
-    g_stopSuperglideRequest.store(true);
-    g_superglideCv.notify_all();
-
-    if (Globals::g_hSuperglideEvent)
-      SetEvent(Globals::g_hSuperglideEvent);
-    WaitForSingleObject(Globals::g_hSuperglideThread, 1000);
-    CloseHandle(Globals::g_hSuperglideThread);
-    Globals::g_hSuperglideThread = NULL;
+    g_superglideThread.request_stop();
+    TriggerSuperglide();
+    g_superglideThread.join();
     std::cout << "Superglide thread stopped." << std::endl;
   }
-  g_stopSuperglideRequest.store(false);
+}
+
+void TriggerSuperglide() noexcept {
+  {
+    std::lock_guard<std::mutex> lock(g_superglideCvMtx);
+    g_superglideCvFlag = true;
+  }
+  g_superglideCv.notify_all();
 }

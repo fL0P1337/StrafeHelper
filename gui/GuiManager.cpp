@@ -684,10 +684,8 @@ void GuiManager::RenderStateContent() {
   ImGui::Separator();
   {
     const int backend = Config::SelectedBackend.load(std::memory_order_relaxed);
-    const bool hookOk = (backend == 0)
-                            ? (Globals::g_hHookThread != NULL)
-                            : (Globals::g_hSuperglideThread != NULL ||
-                               Globals::g_hSpamThread != NULL);
+    BackendStatus status;
+    const bool hookOk = GetActiveBackendStatus(status) && status.driverActive;
     ImGui::Text("Backend:");
     ImGui::SameLine();
     ImGui::TextColored(hookOk ? colOn : ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "%s",
@@ -729,9 +727,8 @@ void GuiManager::RenderStateContent() {
     if (enabled) {
       ImGui::Indent(16.0f);
       if (active) {
-        EnterCriticalSection(&Globals::g_csActiveKeys);
+        std::lock_guard<std::mutex> lock(Globals::g_activeKeysMutex);
         const auto keys = Globals::g_activeSpamKeys;
-        LeaveCriticalSection(&Globals::g_csActiveKeys);
         if (!keys.empty()) {
           ImGui::TextColored(colActive, "Spamming:");
           for (int vk : keys) {

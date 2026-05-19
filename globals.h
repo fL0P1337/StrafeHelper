@@ -1,10 +1,10 @@
-// Globals.h
+// globals.h
 #pragma once
 
 #define WIN32_LEAN_AND_MEAN
 #include <atomic>
 #include <map>
-#include <mutex> // Or keep windows.h for CRITICAL_SECTION
+#include <mutex>
 #include <vector>
 #include <windows.h>
 #include <shellapi.h>
@@ -12,17 +12,7 @@
 namespace Globals {
 
 // --- WinAPI Handles ---
-extern HHOOK g_hHook;
 extern HWND g_hWindow;
-extern HANDLE g_hHookThread;
-extern HANDLE g_hSpamThread;
-extern HANDLE g_hSpamEvent;
-extern HANDLE g_hTurboLootThread;
-extern HANDLE g_hTurboLootEvent;
-extern HANDLE g_hTurboJumpThread;
-extern HANDLE g_hTurboJumpEvent;
-extern HANDLE g_hSuperglideThread;
-extern HANDLE g_hSuperglideEvent;
 extern HINSTANCE g_hInstance;
 
 // --- State Management ---
@@ -56,7 +46,7 @@ struct KeyState {
 extern std::map<int, KeyState> g_KeyInfo;
 extern std::vector<int> g_activeSpamKeys;
 extern std::atomic<unsigned long long> g_spamKeysEpoch;
-extern CRITICAL_SECTION g_csActiveKeys;
+extern std::mutex g_activeKeysMutex;
 extern std::atomic<bool> g_isCSpamActive;
 
 // --- Superglide Stats ---

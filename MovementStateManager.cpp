@@ -1,5 +1,5 @@
-// KeyboardHook.cpp
-#include "KeyboardHook.h"
+// MovementStateManager.cpp
+#include "MovementStateManager.h"
 #include "Config.h"
 #include "Globals.h"
 #include "KeybindManager.h"
@@ -154,25 +154,24 @@ void PublishSpamKeysFromState(bool snapTapEnabled) {
   const std::vector<int> desiredKeys = BuildDesiredSpamKeys(snapTapEnabled);
   bool changed = false;
 
-  EnterCriticalSection(&Globals::g_csActiveKeys);
-  if (Globals::g_activeSpamKeys != desiredKeys) {
-    Globals::g_activeSpamKeys = desiredKeys;
-    Globals::g_spamKeysEpoch.fetch_add(1ULL, std::memory_order_relaxed);
-    changed = true;
-  }
+  {
+    std::lock_guard<std::mutex> lock(Globals::g_activeKeysMutex);
+    if (Globals::g_activeSpamKeys != desiredKeys) {
+      Globals::g_activeSpamKeys = desiredKeys;
+      Globals::g_spamKeysEpoch.fetch_add(1ULL, std::memory_order_relaxed);
+      changed = true;
+    }
 
-  for (int key : {'W', 'A', 'S', 'D'}) {
-    Globals::g_KeyInfo[key].spamming.store(false, std::memory_order_relaxed);
+    for (int key : {'W', 'A', 'S', 'D'}) {
+      Globals::g_KeyInfo[key].spamming.store(false, std::memory_order_relaxed);
+    }
+    for (int vk : desiredKeys) {
+      Globals::g_KeyInfo[vk].spamming.store(true, std::memory_order_relaxed);
+    }
   }
-  for (int vk : desiredKeys) {
-    Globals::g_KeyInfo[vk].spamming.store(true, std::memory_order_relaxed);
-  }
-  LeaveCriticalSection(&Globals::g_csActiveKeys);
 
   if (changed) {
-    if (Globals::g_hSpamEvent) {
-      SetEvent(Globals::g_hSpamEvent);
-    }
+    TriggerSpamEvent();
   }
 }
 
@@ -221,102 +220,6 @@ void SendKeyDownForPhysicallyHeldWasd() {
 }
 
 } // namespace
-
-LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
-  if (nCode != HC_ACTION) {
-    return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam); // Globals::
-  }
-
-  KBDLLHOOKSTRUCT *pKeybd = (KBDLLHOOKSTRUCT *)lParam;
-  int vkCode = pKeybd->vkCode;
-  bool isKeyDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
-  bool isKeyUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
-
-  if (pKeybd->flags & LLKHF_INJECTED) {
-    return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam); // Globals::
-  }
-
-  // Handle dynamic keybinding capture
-  if (KeybindManager::HandleBind(vkCode, isKeyDown)) {
-    return 1;
-  }
-
-  auto itKeyInfo = Globals::g_KeyInfo.find(vkCode);            // Globals::
-  bool isManagedKey = (itKeyInfo != Globals::g_KeyInfo.end()); // Globals::
-
-  const bool isWASD = IsWasdVk(vkCode);
-  const int currentTriggerKey =
-      Config::KeySpamTrigger.load(std::memory_order_relaxed);
-  const bool isTrigger = (vkCode == currentTriggerKey);
-
-  if (isManagedKey) {
-    itKeyInfo->second.physicalKeyDown.store(isKeyDown,
-                                            std::memory_order_relaxed);
-  }
-
-  const bool spamFeatureEnabled =
-      Config::EnableSpam.load(std::memory_order_relaxed);
-  const bool snapTapEnabled =
-      Config::EnableSnapTap.load(std::memory_order_relaxed);
-  const bool spamActive =
-      Globals::g_isCSpamActive.load(std::memory_order_relaxed) &&
-      spamFeatureEnabled;
-
-  // Trigger gates macro spamming ONLY. SnapTap ownership resolution runs
-  // independently.
-  if (isTrigger && spamFeatureEnabled) {
-    // Use KeybindManager to process hold/toggle mode
-    bool shouldBeActive = KeybindManager::ProcessSpamTrigger(vkCode, isKeyDown);
-
-    if (shouldBeActive &&
-        !Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
-      Globals::g_isCSpamActive.store(true, std::memory_order_relaxed);
-      std::cout << "Spam Activated" << std::endl;
-      OnSpamActivated(snapTapEnabled);
-    } else if (!shouldBeActive &&
-               Globals::g_isCSpamActive.load(std::memory_order_relaxed)) {
-      std::cout << "Spam Deactivated" << std::endl;
-      OnSpamDeactivated(snapTapEnabled);
-    }
-    return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam);
-  }
-
-  if (HandleMovementKeyState(vkCode, isKeyDown, isKeyUp, spamActive,
-                             snapTapEnabled)) {
-    return 1;
-  }
-
-  // --- Turbo key detection ---
-  const int turboLootKey = Config::TurboLootKey.load(std::memory_order_relaxed);
-  if (vkCode == turboLootKey &&
-      Config::EnableTurboLoot.load(std::memory_order_relaxed)) {
-    KeybindManager::ProcessTurboLoot(vkCode, isKeyDown);
-    if (Globals::g_hTurboLootEvent)
-      SetEvent(Globals::g_hTurboLootEvent);
-  }
-
-  const int turboJumpKey = Config::TurboJumpKey.load(std::memory_order_relaxed);
-  if (vkCode == turboJumpKey &&
-      Config::EnableTurboJump.load(std::memory_order_relaxed)) {
-    KeybindManager::ProcessTurboJump(vkCode, isKeyDown);
-    if (Globals::g_hTurboJumpEvent)
-      SetEvent(Globals::g_hTurboJumpEvent);
-  }
-
-  // Superglide bind — swallow the physical key so it never reaches the game
-  const int superglideBindVK =
-      Config::SuperglideBind.load(std::memory_order_relaxed);
-  if (vkCode == superglideBindVK &&
-      Config::EnableSuperglide.load(std::memory_order_relaxed)) {
-    // Use KeybindManager for hold/toggle mode (triggers on key-down edge)
-    if (KeybindManager::ProcessSuperglide(vkCode, isKeyDown) &&
-        Globals::g_hSuperglideEvent)
-      SetEvent(Globals::g_hSuperglideEvent);
-    return 1; // suppress — do not pass to game
-  }
-
-  return CallNextHookEx(Globals::g_hHook, nCode, wParam, lParam); // Globals::
-}
 
 void OnSpamActivated(bool snapTapEnabled) {
   // Ensure any held movement keys are virtually UP while spamming.
@@ -414,30 +317,5 @@ void RefreshMovementState() {
 
   if (spamActive) {
     PublishSpamKeysFromState(snapTapEnabled);
-  }
-}
-
-bool SetupKeyboardHook(HINSTANCE hInstance) {
-  // Use Globals::g_hInstance if Application::InitializeApplication sets it
-  // first
-  Globals::g_hHook =
-      SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, Globals::g_hInstance,
-                       0); // Globals:: (both)
-  if (!Globals::g_hHook) { // Globals::
-    LogError("SetWindowsHookEx failed");
-    return false;
-  }
-  std::cout << "Keyboard hook installed." << std::endl;
-  return true;
-}
-
-void TeardownKeyboardHook() {
-  if (Globals::g_hHook) {                        // Globals::
-    if (UnhookWindowsHookEx(Globals::g_hHook)) { // Globals::
-      std::cout << "Keyboard hook uninstalled." << std::endl;
-    } else {
-      LogError("UnhookWindowsHookEx failed");
-    }
-    Globals::g_hHook = NULL; // Globals::
   }
 }

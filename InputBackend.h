@@ -35,6 +35,8 @@ struct BackendStatus {
 
 class InputBackend {
 public:
+  using EventCallback = bool (*)(const NEO_KEY_EVENT &evt) noexcept;
+
   virtual ~InputBackend() = default;
 
   /* Initialize connection to the backend driver */
@@ -43,20 +45,13 @@ public:
   /* Clean shutdown */
   virtual void Shutdown() noexcept = 0;
 
-  /* Poll for events. Fills 'out' with up to 'maxCount' events.
-     Returns number of events read. */
-  [[nodiscard]] virtual uint32_t PollEvents(NEO_KEY_EVENT *out,
-                                            uint32_t maxCount) noexcept = 0;
-
-  /* Pass through an original captured event to the OS stack. */
-  [[nodiscard]] virtual bool PassThrough(const NEO_KEY_EVENT &event) noexcept = 0;
+  /* Set the callback function to receive and filter keyboard events.
+     If the callback returns true, the event is suppressed; otherwise, it is passed through. */
+  virtual void SetCallback(EventCallback cb) noexcept = 0;
 
   /* Inject a key event */
   [[nodiscard]] virtual bool InjectKey(uint16_t scanCode,
                                        uint16_t flags) noexcept = 0;
-
-  /* Wait for new data to be available (optional block) */
-  virtual void WaitForData(uint32_t timeoutMs) noexcept = 0;
 
   /* Query backend status */
   [[nodiscard]] virtual bool GetStatus(BackendStatus &out) noexcept = 0;
@@ -65,7 +60,5 @@ public:
   [[nodiscard]] virtual const char *Name() const noexcept = 0;
 
   /* Whether backend can suppress physical keys by withholding pass-through. */
-  [[nodiscard]] virtual bool CanSuppressPhysical() const noexcept {
-    return true;
-  }
+  [[nodiscard]] virtual bool CanSuppressPhysical() const noexcept = 0;
 };

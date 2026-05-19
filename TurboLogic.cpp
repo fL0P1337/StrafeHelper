@@ -5,8 +5,11 @@
 #include "KeybindManager.h"
 #include "Utils.h"
 #include <atomic>
+#include <condition_variable>
 #include <iostream>
+#include <mutex>
 #include <random>
+#include <thread>
 #include <timeapi.h>
 #include <windows.h>
 
@@ -14,7 +17,18 @@
 
 namespace {
 
-void RunTurboLoop(std::atomic<bool> &stopRequest, HANDLE eventHandle,
+std::jthread g_turboLootThread;
+std::mutex g_turboLootCvMtx;
+std::condition_variable g_turboLootCv;
+bool g_turboLootCvFlag = false;
+
+std::jthread g_turboJumpThread;
+std::mutex g_turboJumpCvMtx;
+std::condition_variable g_turboJumpCv;
+bool g_turboJumpCvFlag = false;
+
+void RunTurboLoop(std::stop_token stopToken,
+                  std::mutex &cvMtx, std::condition_variable &cv, bool &cvFlag,
                   std::atomic<bool> &configEnable, std::atomic<int> &configKey,
                   std::atomic<int> &configDelay,
                   std::atomic<int> &configDuration, bool (*isActiveFunc)(),
@@ -24,7 +38,7 @@ void RunTurboLoop(std::atomic<bool> &stopRequest, HANDLE eventHandle,
   LARGE_INTEGER freq;
   QueryPerformanceFrequency(&freq);
 
-  while (!stopRequest.load(std::memory_order_relaxed)) {
+  while (!stopToken.stop_requested()) {
     DWORD timeout = INFINITE;
 
     if (configEnable.load(std::memory_order_relaxed)) {
@@ -33,9 +47,17 @@ void RunTurboLoop(std::atomic<bool> &stopRequest, HANDLE eventHandle,
       }
     }
 
-    WaitForSingleObject(eventHandle, timeout);
+    if (timeout == INFINITE) {
+      std::unique_lock<std::mutex> cvLock(cvMtx);
+      cv.wait(cvLock, [&cvFlag, &stopToken]() { return cvFlag || stopToken.stop_requested(); });
+      cvFlag = false;
+    } else {
+      std::unique_lock<std::mutex> cvLock(cvMtx);
+      cv.wait_for(cvLock, std::chrono::milliseconds(timeout), [&cvFlag, &stopToken]() { return cvFlag || stopToken.stop_requested(); });
+      cvFlag = false;
+    }
 
-    if (stopRequest.load(std::memory_order_relaxed))
+    if (stopToken.stop_requested())
       break;
 
     if (!configEnable.load(std::memory_order_relaxed))
@@ -69,16 +91,16 @@ void RunTurboLoop(std::atomic<bool> &stopRequest, HANDLE eventHandle,
         QueryPerformanceCounter(&now);
         const LONGLONG remaining = targetTick - now.QuadPart;
 
-        if (stopRequest.load(std::memory_order_relaxed)) {
+        if (stopToken.stop_requested()) {
           break;
         }
 
         if (remaining > spinThreshold) {
-          Sleep(1);
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
       } while (now.QuadPart < targetTick);
 
-      if (stopRequest.load(std::memory_order_relaxed))
+      if (stopToken.stop_requested())
         break;
     }
 
@@ -91,26 +113,18 @@ void RunTurboLoop(std::atomic<bool> &stopRequest, HANDLE eventHandle,
   std::cout << threadName << " thread exiting." << std::endl;
 }
 
-// ---- Turbo Loot ----
-std::atomic<bool> g_stopTurboLootRequest{false};
-
-DWORD WINAPI TurboLootThread(LPVOID) {
-  RunTurboLoop(g_stopTurboLootRequest, Globals::g_hTurboLootEvent,
+void TurboLootThreadFunc(std::stop_token stopToken) {
+  RunTurboLoop(stopToken, g_turboLootCvMtx, g_turboLootCv, g_turboLootCvFlag,
                Config::EnableTurboLoot, Config::TurboLootKey,
                Config::TurboLootDelayMs, Config::TurboLootDurationMs,
                KeybindManager::IsTurboLootActive, "TurboLoot");
-  return 0;
 }
 
-// ---- Turbo Jump ----
-std::atomic<bool> g_stopTurboJumpRequest{false};
-
-DWORD WINAPI TurboJumpThread(LPVOID) {
-  RunTurboLoop(g_stopTurboJumpRequest, Globals::g_hTurboJumpEvent,
+void TurboJumpThreadFunc(std::stop_token stopToken) {
+  RunTurboLoop(stopToken, g_turboJumpCvMtx, g_turboJumpCv, g_turboJumpCvFlag,
                Config::EnableTurboJump, Config::TurboJumpKey,
                Config::TurboJumpDelayMs, Config::TurboJumpDurationMs,
                KeybindManager::IsTurboJumpActive, "TurboJump");
-  return 0;
 }
 
 } // namespace
@@ -118,53 +132,51 @@ DWORD WINAPI TurboJumpThread(LPVOID) {
 // ---- Public API ----
 
 bool StartTurboLootThread() {
-  g_stopTurboLootRequest.store(false);
-  Globals::g_hTurboLootThread =
-      CreateThread(NULL, 0, TurboLootThread, NULL, 0, NULL);
-  if (!Globals::g_hTurboLootThread) {
-    LogError("CreateThread for TurboLootThread failed");
-    return false;
-  }
+  StopTurboLootThread();
+  g_turboLootThread = std::jthread(TurboLootThreadFunc);
   std::cout << "TurboLoot thread started." << std::endl;
   return true;
 }
 
 void StopTurboLootThread() {
-  if (Globals::g_hTurboLootThread) {
+  if (g_turboLootThread.joinable()) {
     std::cout << "Requesting TurboLoot thread stop..." << std::endl;
-    g_stopTurboLootRequest.store(true);
-    if (Globals::g_hTurboLootEvent)
-      SetEvent(Globals::g_hTurboLootEvent);
-    WaitForSingleObject(Globals::g_hTurboLootThread, 1000);
-    CloseHandle(Globals::g_hTurboLootThread);
-    Globals::g_hTurboLootThread = NULL;
+    g_turboLootThread.request_stop();
+    TriggerTurboLoot();
+    g_turboLootThread.join();
     std::cout << "TurboLoot thread stopped." << std::endl;
   }
-  g_stopTurboLootRequest.store(false);
 }
 
 bool StartTurboJumpThread() {
-  g_stopTurboJumpRequest.store(false);
-  Globals::g_hTurboJumpThread =
-      CreateThread(NULL, 0, TurboJumpThread, NULL, 0, NULL);
-  if (!Globals::g_hTurboJumpThread) {
-    LogError("CreateThread for TurboJumpThread failed");
-    return false;
-  }
+  StopTurboJumpThread();
+  g_turboJumpThread = std::jthread(TurboJumpThreadFunc);
   std::cout << "TurboJump thread started." << std::endl;
   return true;
 }
 
 void StopTurboJumpThread() {
-  if (Globals::g_hTurboJumpThread) {
+  if (g_turboJumpThread.joinable()) {
     std::cout << "Requesting TurboJump thread stop..." << std::endl;
-    g_stopTurboJumpRequest.store(true);
-    if (Globals::g_hTurboJumpEvent)
-      SetEvent(Globals::g_hTurboJumpEvent);
-    WaitForSingleObject(Globals::g_hTurboJumpThread, 1000);
-    CloseHandle(Globals::g_hTurboJumpThread);
-    Globals::g_hTurboJumpThread = NULL;
+    g_turboJumpThread.request_stop();
+    TriggerTurboJump();
+    g_turboJumpThread.join();
     std::cout << "TurboJump thread stopped." << std::endl;
   }
-  g_stopTurboJumpRequest.store(false);
+}
+
+void TriggerTurboLoot() noexcept {
+  {
+    std::lock_guard<std::mutex> lock(g_turboLootCvMtx);
+    g_turboLootCvFlag = true;
+  }
+  g_turboLootCv.notify_all();
+}
+
+void TriggerTurboJump() noexcept {
+  {
+    std::lock_guard<std::mutex> lock(g_turboJumpCvMtx);
+    g_turboJumpCvFlag = true;
+  }
+  g_turboJumpCv.notify_all();
 }

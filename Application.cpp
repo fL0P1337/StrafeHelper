@@ -5,8 +5,9 @@
 #include "Globals.h"
 #include "InputBackend.h"
 #include "InterceptionBackend.h"
+#include "KbdHookBackend.h"
 #include "KeybindManager.h"
-#include "KeyboardHook.h"
+#include "MovementStateManager.h"
 #include "SpamLogic.h"
 #include "SuperglideLogic.h"
 #include "TurboLogic.h"
@@ -21,24 +22,14 @@
 
 // --- Define Global Variables (declared extern in Globals.h) ---
 namespace Globals {
-HHOOK g_hHook = NULL;
 HWND g_hWindow = NULL;
-HANDLE g_hHookThread = NULL;
-HANDLE g_hSpamThread = NULL;
-HANDLE g_hSpamEvent = NULL;
-HANDLE g_hTurboLootThread = NULL;
-HANDLE g_hTurboLootEvent = NULL;
-HANDLE g_hTurboJumpThread = NULL;
-HANDLE g_hTurboJumpEvent = NULL;
-HANDLE g_hSuperglideThread = NULL;
-HANDLE g_hSuperglideEvent = NULL;
 HINSTANCE g_hInstance = NULL;
 
 // Need full types here since it's the definition
 std::map<int, KeyState> g_KeyInfo;
 std::vector<int> g_activeSpamKeys;
 std::atomic<unsigned long long> g_spamKeysEpoch{0};
-CRITICAL_SECTION g_csActiveKeys; // Initialized in InitializeApplication
+std::mutex g_activeKeysMutex;
 std::atomic<bool> g_isCSpamActive{false};
 
 SuperglideStats g_superglideStats{};
@@ -49,14 +40,10 @@ std::atomic<std::atomic<int> *> g_bindingTarget{nullptr};
 } // namespace Globals
 // --- End Global Variable Definitions ---
 
-// -----------------------------------------------------------------------
-// Interception backend state (only used when Interception is active)
-// -----------------------------------------------------------------------
 namespace {
-std::unique_ptr<InputBackend> g_interceptionBackend;
-std::thread g_interceptionThread;
-std::atomic<bool> g_interceptionRunning{false};
-std::mutex g_backendMutex; // guards start/stop of interception thread
+std::unique_ptr<InputBackend> g_activeBackend;
+std::mutex g_backendMutex;
+} // namespace
 
 // -----------------------------------------------------------------------
 // Shared keybind dispatch logic used by both interception keyboard events
@@ -100,8 +87,7 @@ bool HandleFeatureKeyEvent(int vkCode, bool isKeyDown) noexcept {
   if (vkCode == turboLootKey &&
       Config::EnableTurboLoot.load(std::memory_order_relaxed)) {
     KeybindManager::ProcessTurboLoot(vkCode, isKeyDown);
-    if (Globals::g_hTurboLootEvent)
-      SetEvent(Globals::g_hTurboLootEvent);
+    TriggerTurboLoot();
     return false;
   }
 
@@ -110,8 +96,7 @@ bool HandleFeatureKeyEvent(int vkCode, bool isKeyDown) noexcept {
   if (vkCode == turboJumpKey &&
       Config::EnableTurboJump.load(std::memory_order_relaxed)) {
     KeybindManager::ProcessTurboJump(vkCode, isKeyDown);
-    if (Globals::g_hTurboJumpEvent)
-      SetEvent(Globals::g_hTurboJumpEvent);
+    TriggerTurboJump();
     return false;
   }
 
@@ -120,9 +105,8 @@ bool HandleFeatureKeyEvent(int vkCode, bool isKeyDown) noexcept {
       Config::SuperglideBind.load(std::memory_order_relaxed);
   if (vkCode == superglideBindVK &&
       Config::EnableSuperglide.load(std::memory_order_relaxed)) {
-    if (KeybindManager::ProcessSuperglide(vkCode, isKeyDown) &&
-        Globals::g_hSuperglideEvent) {
-      SetEvent(Globals::g_hSuperglideEvent);
+    if (KeybindManager::ProcessSuperglide(vkCode, isKeyDown)) {
+      TriggerSuperglide();
     }
     return true;
   }
@@ -169,80 +153,10 @@ bool DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept {
   return HandleFeatureKeyEvent(static_cast<int>(vkCode), isKeyDown);
 }
 
-
-// Interception polling thread
-// -----------------------------------------------------------------------
-void InterceptionThreadMain() noexcept {
-  constexpr uint32_t kPollTimeoutMs = 1;
-  constexpr uint32_t kMaxBatch = 32;
-  NEO_KEY_EVENT batch[kMaxBatch];
-
-  while (g_interceptionRunning.load(std::memory_order_relaxed)) {
-    if (!g_interceptionBackend) {
-      break;
-    }
-    g_interceptionBackend->WaitForData(kPollTimeoutMs);
-
-    const uint32_t count = g_interceptionBackend->PollEvents(batch, kMaxBatch);
-    for (uint32_t i = 0; i < count; ++i) {
-      const bool shouldSuppress = DispatchKeyEvent(batch[i]);
-      if (!shouldSuppress) {
-        (void)g_interceptionBackend->PassThrough(batch[i]);
-      }
-    }
-  }
-}
-
-// -----------------------------------------------------------------------
-// Stop the interception backend thread (call with g_backendMutex held or
-// from CleanupApplication before destruction).
-// -----------------------------------------------------------------------
-void StopInterceptionBackend() {
-  g_interceptionRunning.store(false, std::memory_order_relaxed);
-  if (g_interceptionThread.joinable()) {
-    g_interceptionThread.join();
-  }
-  if (g_interceptionBackend) {
-    g_interceptionBackend->Shutdown();
-    g_interceptionBackend.reset();
-  }
-}
-
-// -----------------------------------------------------------------------
-// Stop the existing WinHook thread
-// -----------------------------------------------------------------------
-void StopHookThread() {
-  if (Globals::g_hHookThread) {
-    PostThreadMessage(GetThreadId(Globals::g_hHookThread), WM_QUIT, 0, 0);
-    WaitForSingleObject(Globals::g_hHookThread, 2000);
-    CloseHandle(Globals::g_hHookThread);
-    Globals::g_hHookThread = NULL;
-  }
-}
-} // anonymous namespace
-
 void HandleSideMouseButton(int vkCode, bool isDown) {
   if (!KeybindManager::HandleBind(vkCode, isDown)) {
     HandleFeatureKeyEvent(vkCode, isDown);
   }
-}
-
-// -----------------------------------------------------------------------
-// Original WinHook thread function — unchanged
-// -----------------------------------------------------------------------
-DWORD WINAPI HookThreadFunc(LPVOID /*lpParam*/) {
-  if (!SetupKeyboardHook(Globals::g_hInstance)) {
-    return 1;
-  }
-
-  MSG msg;
-  while (GetMessage(&msg, NULL, 0, 0) > 0) {
-    TranslateMessage(&msg);
-    DispatchMessage(&msg);
-  }
-
-  TeardownKeyboardHook();
-  return 0;
 }
 
 // -----------------------------------------------------------------------
@@ -253,88 +167,66 @@ void SwitchBackend(Config::InputBackendKind kind) {
 
   const auto current =
       static_cast<Config::InputBackendKind>(Config::SelectedBackend.load());
-  if (current == kind) {
+  if (current == kind && g_activeBackend) {
     return; // nothing to do
   }
 
-  // Stop whichever is currently running
-  if (current == Config::InputBackendKind::Interception) {
-    StopInterceptionBackend();
-  } else {
-    StopHookThread();
+  // Stop whichever backend is currently running
+  if (g_activeBackend) {
+    g_activeBackend->Shutdown();
+    g_activeBackend.reset();
   }
 
   Config::SelectedBackend.store(static_cast<int>(kind));
   Config::SaveConfig();
 
   // Start the newly selected backend
+  std::unique_ptr<InputBackend> backend;
   if (kind == Config::InputBackendKind::Interception) {
-    auto backend = std::make_unique<InterceptionBackend>();
+    backend = std::make_unique<InterceptionBackend>();
+  } else {
+    backend = std::make_unique<KbdHookBackend>();
+  }
+
+  backend->SetCallback(DispatchKeyEvent);
+  if (!backend->Initialize()) {
+    std::cout << "[SwitchBackend] Backend initialization failed. Falling back to KbdHook." << std::endl;
+    // Fall back to KbdHook if the requested backend fails
+    Config::SelectedBackend.store(static_cast<int>(Config::InputBackendKind::KbdHook));
+    Config::SaveConfig();
+    
+    backend = std::make_unique<KbdHookBackend>();
+    backend->SetCallback(DispatchKeyEvent);
     if (!backend->Initialize()) {
-      std::cout << "[SwitchBackend] Interception backend init failed. "
-                   "Falling back to KbdHook."
-                << std::endl;
-      // revert
-      Config::SelectedBackend.store(
-          static_cast<int>(Config::InputBackendKind::KbdHook));
-      Config::SaveConfig();
-      Globals::g_hHookThread =
-          CreateThread(NULL, 0, HookThreadFunc, NULL, 0, NULL);
+      std::cout << "[SwitchBackend] Fallback backend initialization failed!" << std::endl;
       return;
     }
-    g_interceptionBackend = std::move(backend);
-    g_interceptionRunning.store(true, std::memory_order_relaxed);
-    g_interceptionThread = std::thread(InterceptionThreadMain);
-    std::cout << "[SwitchBackend] Switched to Interception backend."
-              << std::endl;
-  } else {
-    Globals::g_hHookThread =
-        CreateThread(NULL, 0, HookThreadFunc, NULL, 0, NULL);
-    std::cout << "[SwitchBackend] Switched to KbdHook backend." << std::endl;
   }
+
+  g_activeBackend = std::move(backend);
+  std::cout << "[SwitchBackend] Switched to " << g_activeBackend->Name() << std::endl;
+}
+
+bool GetActiveBackendStatus(BackendStatus &out) noexcept {
+  std::lock_guard<std::mutex> lock(g_backendMutex);
+  if (g_activeBackend) {
+    return g_activeBackend->GetStatus(out);
+  }
+  return false;
 }
 
 bool InitializeApplication(HINSTANCE hInstance) {
   Globals::g_hInstance = hInstance;
-
-  InitializeCriticalSection(&Globals::g_csActiveKeys);
 
   Config::LoadConfig();
 
   // Initialize keybind manager for edge detection
   KeybindManager::Initialize();
 
-  Globals::g_hSpamEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-  if (!Globals::g_hSpamEvent) {
-    LogError("CreateEvent failed");
-    DeleteCriticalSection(&Globals::g_csActiveKeys);
-    return false;
-  }
-
-  Globals::g_hTurboLootEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-  Globals::g_hTurboJumpEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-  Globals::g_hSuperglideEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-  if (!Globals::g_hTurboLootEvent || !Globals::g_hTurboJumpEvent ||
-      !Globals::g_hSuperglideEvent) {
-    LogError("CreateEvent for turbo/superglide failed");
-    if (Globals::g_hSpamEvent)
-      CloseHandle(Globals::g_hSpamEvent);
-    if (Globals::g_hTurboLootEvent)
-      CloseHandle(Globals::g_hTurboLootEvent);
-    if (Globals::g_hTurboJumpEvent)
-      CloseHandle(Globals::g_hTurboJumpEvent);
-    if (Globals::g_hSuperglideEvent)
-      CloseHandle(Globals::g_hSuperglideEvent);
-    DeleteCriticalSection(&Globals::g_csActiveKeys);
-    return false;
-  }
-
   // Window creation moved to GuiManager inside main.cpp, but tray icon might
   // still rely on it. We will keep CreateAppWindow as a hidden message window
   // for Tray/Internal events.
   if (!CreateAppWindow(hInstance)) {
-    CloseHandle(Globals::g_hSpamEvent);
-    DeleteCriticalSection(&Globals::g_csActiveKeys);
     return false;
   }
 
@@ -347,69 +239,46 @@ bool InitializeApplication(HINSTANCE hInstance) {
   const auto backendKind =
       static_cast<Config::InputBackendKind>(Config::SelectedBackend.load());
 
+  std::unique_ptr<InputBackend> backend;
   if (backendKind == Config::InputBackendKind::Interception) {
-    auto backend = std::make_unique<InterceptionBackend>();
-    if (backend->Initialize()) {
-      g_interceptionBackend = std::move(backend);
-      g_interceptionRunning.store(true, std::memory_order_relaxed);
-      g_interceptionThread = std::thread(InterceptionThreadMain);
-      std::cout << "Interception backend started." << std::endl;
-    } else {
-      std::cout << "[InitializeApplication] Interception backend init failed. "
-                   "Falling back to KbdHook."
-                << std::endl;
-      Config::SelectedBackend.store(
-          static_cast<int>(Config::InputBackendKind::KbdHook));
-      // fall through to KbdHook
-      Globals::g_hHookThread =
-          CreateThread(NULL, 0, HookThreadFunc, NULL, 0, NULL);
-      if (!Globals::g_hHookThread) {
-        goto hook_thread_failed;
-      }
-    }
+    backend = std::make_unique<InterceptionBackend>();
   } else {
-    // Default: KbdHook
-    Globals::g_hHookThread =
-        CreateThread(NULL, 0, HookThreadFunc, NULL, 0, NULL);
-    if (!Globals::g_hHookThread) {
-    hook_thread_failed:
+    backend = std::make_unique<KbdHookBackend>();
+  }
+
+  backend->SetCallback(DispatchKeyEvent);
+  if (!backend->Initialize()) {
+    std::cout << "[InitializeApplication] Backend init failed. Falling back to KbdHook." << std::endl;
+    Config::SelectedBackend.store(static_cast<int>(Config::InputBackendKind::KbdHook));
+    backend = std::make_unique<KbdHookBackend>();
+    backend->SetCallback(DispatchKeyEvent);
+    if (!backend->Initialize()) {
+      std::cout << "[InitializeApplication] Fallback backend init failed!" << std::endl;
       if (Globals::g_hWindow)
         DestroyWindow(Globals::g_hWindow);
       UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
-      CloseHandle(Globals::g_hSpamEvent);
-      CloseHandle(Globals::g_hTurboLootEvent);
-      CloseHandle(Globals::g_hTurboJumpEvent);
-      CloseHandle(Globals::g_hSuperglideEvent);
-      DeleteCriticalSection(&Globals::g_csActiveKeys);
-      Globals::g_hSpamEvent = NULL;
-      Globals::g_hTurboLootEvent = NULL;
-      Globals::g_hTurboJumpEvent = NULL;
-      Globals::g_hSuperglideEvent = NULL;
       return false;
     }
   }
 
+  {
+    std::lock_guard<std::mutex> lock(g_backendMutex);
+    g_activeBackend = std::move(backend);
+  }
+
   if (!StartSpamThread()) {
     // Need to stop hook/backend thread cleanly
-    if (Config::SelectedBackend.load() ==
-        static_cast<int>(Config::InputBackendKind::Interception)) {
-      StopInterceptionBackend();
-    } else {
-      StopHookThread();
+    {
+      std::lock_guard<std::mutex> lock(g_backendMutex);
+      if (g_activeBackend) {
+        g_activeBackend->Shutdown();
+        g_activeBackend.reset();
+      }
     }
 
     if (Globals::g_hWindow)
       DestroyWindow(Globals::g_hWindow);
     UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
-    CloseHandle(Globals::g_hSpamEvent);
-    CloseHandle(Globals::g_hTurboLootEvent);
-    CloseHandle(Globals::g_hTurboJumpEvent);
-    CloseHandle(Globals::g_hSuperglideEvent);
-    DeleteCriticalSection(&Globals::g_csActiveKeys);
-    Globals::g_hSpamEvent = NULL;
-    Globals::g_hTurboLootEvent = NULL;
-    Globals::g_hTurboJumpEvent = NULL;
-    Globals::g_hSuperglideEvent = NULL;
     return false;
   }
 
@@ -432,40 +301,19 @@ void CleanupApplication() {
   // Stop whichever input backend is active
   {
     std::lock_guard<std::mutex> lock(g_backendMutex);
-    if (Config::SelectedBackend.load() ==
-        static_cast<int>(Config::InputBackendKind::Interception)) {
-      StopInterceptionBackend();
-    } else {
-      StopHookThread();
+    if (g_activeBackend) {
+      g_activeBackend->Shutdown();
+      g_activeBackend.reset();
     }
   }
+
+  DestroyAppWindow();
 
   if (Globals::g_hInstance) {
     if (UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance)) {
       std::cout << "Window class unregistered." << std::endl;
     }
   }
-
-  if (Globals::g_hSpamEvent) {
-    CloseHandle(Globals::g_hSpamEvent);
-    Globals::g_hSpamEvent = NULL;
-    std::cout << "Spam event handle closed." << std::endl;
-  }
-  if (Globals::g_hTurboLootEvent) {
-    CloseHandle(Globals::g_hTurboLootEvent);
-    Globals::g_hTurboLootEvent = NULL;
-  }
-  if (Globals::g_hTurboJumpEvent) {
-    CloseHandle(Globals::g_hTurboJumpEvent);
-    Globals::g_hTurboJumpEvent = NULL;
-  }
-  if (Globals::g_hSuperglideEvent) {
-    CloseHandle(Globals::g_hSuperglideEvent);
-    Globals::g_hSuperglideEvent = NULL;
-  }
-
-  DeleteCriticalSection(&Globals::g_csActiveKeys);
-  std::cout << "Critical section deleted." << std::endl;
 
   Globals::g_hInstance = NULL;
 
