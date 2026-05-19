@@ -12,7 +12,7 @@
 #include "SuperglideLogic.h"
 #include "PrecisionTimer.h"
 #include "Config.h"
-#include "globals.h"
+#include "Globals.h"
 #include "Application.h"
 #include "Logger.h"
 #include "Utils.h"

@@ -1,4 +1,4 @@
-#include "globals.h"
+#include "Globals.h"
 #include "Application.h"
 #include <vector>
 #include <mutex>

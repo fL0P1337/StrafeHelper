@@ -1,7 +1,7 @@
 #include <iostream>
 #include <cassert>
 #include "SuperglideLogic.h"
-#include "globals.h"
+#include "Globals.h"
 
 bool g_mockCreateThreadShouldFail = false;
 
