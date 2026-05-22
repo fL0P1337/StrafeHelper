@@ -7,12 +7,14 @@
 #include "Logger.h"
 #include "Utils.h"
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <thread>
 #include <timeapi.h>
-#include <vector>
 #include <windows.h>
 #include <atomic>
 #pragma comment(lib, "winmm.lib")
@@ -27,44 +29,51 @@ bool IsPhysicallyHeldMovementKey(int vkCode) {
   if (vkCode != 'W' && vkCode != 'A' && vkCode != 'S' && vkCode != 'D') {
     return false;
   }
-  return Globals::g_KeyInfo[vkCode].physicalKeyDown.load(std::memory_order_relaxed);
+  return Globals::g_KeyInfo[vkCode].physicalKeyDown.load(std::memory_order_acquire);
 }
 
-void GetSpamSnapshot(std::vector<int> &keys, unsigned long long &epoch) {
-  std::lock_guard<std::mutex> lock(Globals::g_activeKeysMutex);
-  keys = Globals::g_activeSpamKeys;
-  epoch = Globals::g_spamKeysEpoch.load(std::memory_order_relaxed);
+// Decodes the active spam-key mask from the lurch state atomic into a fixed
+// stack array of VK codes, returning the number of keys written and the
+// epoch observed at load time.
+size_t GetSpamSnapshot(int (&keys)[4], uint32_t &epoch) {
+  const uint32_t snapshot =
+      Globals::g_lurchState.load(std::memory_order_acquire);
+  epoch = snapshot;
+  return Globals::DecodeLurchKeys(snapshot & Globals::kLurchKeyMask, keys);
 }
 
 void SpamThreadFunc(std::stop_token stopToken) {
   timeBeginPeriod(1);
   PrecisionTimer timer;
 
-  std::vector<int> localActiveKeys;
-  localActiveKeys.reserve(8);
-  std::vector<int> virtuallyDownKeys;
-  virtuallyDownKeys.reserve(8);
+  // Stack-allocated buffers — no heap churn per spam cycle.
+  int localActiveKeys[4] = {0, 0, 0, 0};
+  size_t localActiveCount = 0;
+  int virtuallyDownKeys[4] = {0, 0, 0, 0};
+  size_t virtuallyDownCount = 0;
 
-  auto releaseVirtuallyDownKeys = [&virtuallyDownKeys](bool preserveHeldKeys) {
-    if (virtuallyDownKeys.empty()) {
+  auto releaseVirtuallyDownKeys = [&virtuallyDownKeys, &virtuallyDownCount](
+                                      bool preserveHeldKeys) {
+    if (virtuallyDownCount == 0) {
       return;
     }
 
-    std::vector<int> keysToRelease;
-    keysToRelease.reserve(virtuallyDownKeys.size());
+    int keysToRelease[4] = {0, 0, 0, 0};
+    size_t keysToReleaseCount = 0;
 
-    for (int vk : virtuallyDownKeys) {
+    for (size_t i = 0; i < virtuallyDownCount; ++i) {
+      const int vk = virtuallyDownKeys[i];
       if (preserveHeldKeys && IsPhysicallyHeldMovementKey(vk)) {
         continue;
       }
-      keysToRelease.push_back(vk);
+      keysToRelease[keysToReleaseCount++] = vk;
     }
 
-    if (!keysToRelease.empty()) {
-      SendKeyInputBatch(keysToRelease, false);
+    if (keysToReleaseCount != 0) {
+      SendKeyInputBatch(keysToRelease, keysToReleaseCount, false);
     }
 
-    virtuallyDownKeys.clear();
+    virtuallyDownCount = 0;
   };
 
   auto interruptibleSleep = [&timer, &stopToken](DWORD ms) -> bool {
@@ -75,7 +84,7 @@ void SpamThreadFunc(std::stop_token stopToken) {
 
     LONGLONG now = start;
     while (now < targetTick) {
-      if (stopToken.stop_requested() || g_spamCvFlag.load(std::memory_order_relaxed)) {
+      if (stopToken.stop_requested() || g_spamCvFlag.load(std::memory_order_acquire)) {
         return false;
       }
       const LONGLONG remaining = targetTick - now;
@@ -91,36 +100,50 @@ void SpamThreadFunc(std::stop_token stopToken) {
 
   while (!stopToken.stop_requested()) {
     bool shouldBeActive =
-        Globals::g_isSpamActive.load(std::memory_order_relaxed) &&
+        Globals::g_isSpamActive.load(std::memory_order_acquire) &&
         Config::EnableSpam.load(std::memory_order_relaxed);
 
-    unsigned long long epochBeforeWait = 0;
-    GetSpamSnapshot(localActiveKeys, epochBeforeWait);
-    bool keysCurrentlyActive = !localActiveKeys.empty();
+    uint32_t epochBeforeWait = 0;
+    localActiveCount = GetSpamSnapshot(localActiveKeys, epochBeforeWait);
+    bool keysCurrentlyActive = (localActiveCount != 0);
 
     if (!shouldBeActive || !keysCurrentlyActive) {
       std::unique_lock<std::mutex> cvLock(g_spamCvMtx);
-      g_spamCv.wait(cvLock, [&stopToken]() { 
-          return g_spamCvFlag.load(std::memory_order_relaxed) || stopToken.stop_requested(); 
+      g_spamCv.wait(cvLock, [&stopToken]() {
+          return g_spamCvFlag.load(std::memory_order_acquire) || stopToken.stop_requested();
       });
-      g_spamCvFlag.store(false, std::memory_order_relaxed);
+      g_spamCvFlag.store(false, std::memory_order_release);
       releaseVirtuallyDownKeys(true);
       continue;
     }
 
-    g_spamCvFlag.store(false, std::memory_order_relaxed);
+    g_spamCvFlag.store(false, std::memory_order_release);
 
-    if (Globals::g_spamKeysEpoch.load(std::memory_order_relaxed) != epochBeforeWait) {
+    // Final pre-inject validation: re-check the lurch state and the spam-
+    // active flag right before we touch SendInput. This closes the window
+    // where a WASD key was released (or the trigger lifted) between the
+    // snapshot above and the actual injection — the previous code would
+    // emit one extra ghost DOWN for the just-released key.
+    const uint32_t epochNow =
+        Globals::g_lurchState.load(std::memory_order_acquire);
+    if (epochNow != epochBeforeWait) {
+      continue; // Mask changed under us — re-snapshot next iteration.
+    }
+    if (!Globals::g_isSpamActive.load(std::memory_order_acquire) ||
+        !Config::EnableSpam.load(std::memory_order_relaxed)) {
       continue;
     }
 
-    SendKeyInputBatch(localActiveKeys, true);
-    virtuallyDownKeys = localActiveKeys;
+    SendKeyInputBatch(localActiveKeys, localActiveCount, true);
+    for (size_t i = 0; i < localActiveCount; ++i) {
+      virtuallyDownKeys[i] = localActiveKeys[i];
+    }
+    virtuallyDownCount = localActiveCount;
 
     DWORD keyDownDuration = ApplyJitter(Config::SpamKeyDownDurationMs.load(std::memory_order_relaxed));
     if (keyDownDuration > 0) {
       if (!interruptibleSleep(keyDownDuration)) {
-        bool shouldBeActiveNow = Globals::g_isSpamActive.load(std::memory_order_relaxed) &&
+        bool shouldBeActiveNow = Globals::g_isSpamActive.load(std::memory_order_acquire) &&
                                  Config::EnableSpam.load(std::memory_order_relaxed);
         releaseVirtuallyDownKeys(!shouldBeActiveNow);
         continue;
@@ -148,72 +171,129 @@ void SpamThreadFunc(std::stop_token stopToken) {
 }
 } // namespace
 
-void SendKeyInputBatch(const std::vector<int> &keys, bool keyDown) {
-  if (keys.empty())
+namespace {
+// Per-VK cached scan code + flag template, populated lazily on first use.
+// The hot path (spam loop, hammered every few ms) no longer pays the cost
+// of MapVirtualKeyW(VSC_TO_VK_EX) on every cycle.
+struct WasdScanEntry {
+  WORD scanCode;
+  DWORD baseFlags;     // KEYEVENTF_SCANCODE (+ EXTENDEDKEY for extended keys)
+  std::atomic<bool> ready{false};
+};
+
+std::array<WasdScanEntry, 256> g_scanCache{};
+
+void EnsureScanCacheEntry(int vk) {
+  if (vk < 0 || vk >= 256) return;
+  auto &entry = g_scanCache[static_cast<size_t>(vk)];
+  if (entry.ready.load(std::memory_order_acquire)) return;
+
+  entry.scanCode = VirtualKeyToScanCode(vk);
+  entry.baseFlags = KEYEVENTF_SCANCODE;
+  // Mirror VirtualKeyInputFlags' extended-key detection without re-calling
+  // MapVirtualKeyW per event.
+  const UINT extendedScan =
+      MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC_EX);
+  if ((extendedScan & 0xE000u) == 0xE000u) {
+    entry.baseFlags |= KEYEVENTF_EXTENDEDKEY;
+  }
+  entry.ready.store(true, std::memory_order_release);
+}
+} // namespace
+
+void SendKeyInputBatch(const int *keys, size_t count, bool keyDown) {
+  if (count == 0)
     return;
 
-  std::vector<INPUT> inputs(keys.size());
-  for (size_t i = 0; i < keys.size(); ++i) {
+  // Bounded to ≤4 (WASD); stack-allocate to avoid heap churn per cycle.
+  std::array<INPUT, 4> inputs{};
+  const size_t n = (count <= inputs.size()) ? count : inputs.size();
+  for (size_t i = 0; i < n; ++i) {
+    const int vk = keys[i];
+    EnsureScanCacheEntry(vk);
+    const auto &entry = g_scanCache[static_cast<size_t>(vk)];
+
     inputs[i].type = INPUT_KEYBOARD;
     inputs[i].ki.wVk = 0;
-    inputs[i].ki.wScan = VirtualKeyToScanCode(keys[i]);
-    inputs[i].ki.dwFlags = VirtualKeyInputFlags(keys[i], keyDown);
+    inputs[i].ki.wScan = entry.scanCode;
+    DWORD flags = entry.baseFlags;
+    if (!keyDown) {
+      flags |= KEYEVENTF_KEYUP;
+    }
+    inputs[i].ki.dwFlags = flags;
     inputs[i].ki.time = 0;
     inputs[i].ki.dwExtraInfo = NEO_SYNTHETIC_INFORMATION;
   }
-  SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
+  SendInput(static_cast<UINT>(n), inputs.data(), sizeof(INPUT));
 }
 
 void CleanupSpamState(bool restoreHeldKeys) {
-  Globals::g_isSpamActive.store(false, std::memory_order_relaxed);
+  Globals::g_isSpamActive.store(false, std::memory_order_release);
 
-  std::vector<int> keysThatWereSpamming;
-  std::vector<int> keysToRelease;
-  std::vector<int> physicallyHeldKeys;
-  std::vector<int> keysToRestoreDown;
-  physicallyHeldKeys.reserve(4);
-
+  // Read the current spam-key bitmask and atomically zero the key bits while
+  // bumping the epoch. The publisher CAS in MovementStateManager uses the
+  // same epoch convention so cleanup interleaves correctly with publish.
+  int keysThatWereSpamming[4] = {0, 0, 0, 0};
+  size_t keysThatWereSpammingCount = 0;
   {
-    std::lock_guard<std::mutex> lock(Globals::g_activeKeysMutex);
-    keysThatWereSpamming = Globals::g_activeSpamKeys;
-    Globals::g_activeSpamKeys.clear();
-    Globals::g_spamKeysEpoch.fetch_add(1ULL, std::memory_order_relaxed);
+    uint32_t prev = Globals::g_lurchState.load(std::memory_order_acquire);
+    uint32_t next;
+    do {
+      const uint32_t epoch =
+          (prev & ~Globals::kLurchKeyMask) + Globals::kLurchEpochInc;
+      next = epoch & ~Globals::kLurchKeyMask; // key bits cleared
+    } while (!Globals::g_lurchState.compare_exchange_weak(
+        prev, next, std::memory_order_acq_rel, std::memory_order_acquire));
+
+    keysThatWereSpammingCount = Globals::DecodeLurchKeys(
+        prev & Globals::kLurchKeyMask, keysThatWereSpamming);
   }
+
+  int physicallyHeldKeys[4] = {0, 0, 0, 0};
+  size_t physicallyHeldCount = 0;
+  int keysToRestoreDown[4] = {0, 0, 0, 0};
+  size_t keysToRestoreDownCount = 0;
 
   for (int key : {'W', 'A', 'S', 'D'}) {
     Globals::KeyState &state = Globals::g_KeyInfo[key];
     state.spamming.store(false, std::memory_order_relaxed);
     const bool physicallyHeld =
-        state.physicalKeyDown.load(std::memory_order_relaxed);
+        state.physicalKeyDown.load(std::memory_order_acquire);
     if (physicallyHeld) {
-      physicallyHeldKeys.push_back(key);
+      physicallyHeldKeys[physicallyHeldCount++] = key;
       if (restoreHeldKeys) {
-        keysToRestoreDown.push_back(key);
+        keysToRestoreDown[keysToRestoreDownCount++] = key;
       }
     }
   }
 
-  keysToRelease.reserve(keysThatWereSpamming.size());
-  for (int vk : keysThatWereSpamming) {
-    const bool isStillPhysicallyHeld =
-        std::find(physicallyHeldKeys.begin(), physicallyHeldKeys.end(), vk) !=
-        physicallyHeldKeys.end();
+  int keysToRelease[4] = {0, 0, 0, 0};
+  size_t keysToReleaseCount = 0;
+  for (size_t i = 0; i < keysThatWereSpammingCount; ++i) {
+    const int vk = keysThatWereSpamming[i];
+    bool isStillPhysicallyHeld = false;
+    for (size_t j = 0; j < physicallyHeldCount; ++j) {
+      if (physicallyHeldKeys[j] == vk) {
+        isStillPhysicallyHeld = true;
+        break;
+      }
+    }
     if (!isStillPhysicallyHeld) {
-      keysToRelease.push_back(vk);
+      keysToRelease[keysToReleaseCount++] = vk;
     }
   }
 
-  if (!keysToRelease.empty()) {
-    SendKeyInputBatch(keysToRelease, false);
+  if (keysToReleaseCount != 0) {
+    SendKeyInputBatch(keysToRelease, keysToReleaseCount, false);
     Logger::GetInstance().Log("  Sent final UP for spammed keys.");
   }
 
-  if (restoreHeldKeys && !keysToRestoreDown.empty()) {
-    SendKeyInputBatch(keysToRestoreDown, true);
+  if (restoreHeldKeys && keysToRestoreDownCount != 0) {
+    SendKeyInputBatch(keysToRestoreDown, keysToRestoreDownCount, true);
     std::string msg = "  Restored DOWN state for physically held keys:";
-    for (int k : keysToRestoreDown) {
+    for (size_t i = 0; i < keysToRestoreDownCount; ++i) {
       msg += ' ';
-      msg += static_cast<char>(k);
+      msg += static_cast<char>(keysToRestoreDown[i]);
     }
     Logger::GetInstance().Log(msg);
   }
@@ -239,7 +319,7 @@ void StopSpamThread() {
 }
 
 void TriggerSpamEvent() noexcept {
-  g_spamCvFlag.store(true, std::memory_order_relaxed);
+  g_spamCvFlag.store(true, std::memory_order_release);
   {
     std::lock_guard<std::mutex> lock(g_spamCvMtx);
   }

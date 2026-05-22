@@ -727,13 +727,16 @@ void GuiManager::RenderStateContent() {
     if (enabled) {
       ImGui::Indent(16.0f);
       if (active) {
-        std::lock_guard<std::mutex> lock(Globals::g_activeKeysMutex);
-        const auto keys = Globals::g_activeSpamKeys;
-        if (!keys.empty()) {
+        const uint32_t lurch =
+            Globals::g_lurchState.load(std::memory_order_acquire);
+        int keys[4]{};
+        const size_t n =
+            Globals::DecodeLurchKeys(lurch & Globals::kLurchKeyMask, keys);
+        if (n != 0) {
           ImGui::TextColored(colActive, "Spamming:");
-          for (int vk : keys) {
+          for (size_t i = 0; i < n; ++i) {
             ImGui::SameLine();
-            ImGui::Text("%s", FormatVirtualKeyName(vk).c_str());
+            ImGui::Text("%s", FormatVirtualKeyName(keys[i]).c_str());
           }
         }
       } else {

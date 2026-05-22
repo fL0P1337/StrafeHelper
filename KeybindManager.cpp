@@ -4,21 +4,25 @@
 #include "Config.h"
 #include "Globals.h"
 #include "Logger.h"
-#include <map>
-#include <mutex>
+#include <array>
+#include <atomic>
 #include <string>
 #include <windows.h>
 
 namespace KeybindManager {
 
-// Track previous key state for edge detection
-// Key: VK code, Value: was key down on previous event
-static std::map<int, bool> g_previousKeyState;
-static std::mutex g_stateMutex;
+// Per-VK previous-state tracking for edge detection. The former
+// std::map<int,bool> + std::mutex required heap allocation, a hash/tree
+// lookup, and a global lock on every keystroke. The fixed-size array of
+// atomics indexed by VK eliminates allocation, lock contention, and cache
+// misses for the same observable behaviour. Single dispatch thread today,
+// but atomics keep us safe if that changes.
+static std::array<std::atomic<bool>, 256> g_previousKeyState{};
 
 void Initialize() {
-  std::lock_guard<std::mutex> lock(g_stateMutex);
-  g_previousKeyState.clear();
+  for (auto &v : g_previousKeyState) {
+    v.store(false, std::memory_order_relaxed);
+  }
 }
 
 KeyAction ProcessKeyEvent(int vkCode, bool isKeyDown, int configKey,
@@ -32,17 +36,12 @@ KeyAction ProcessKeyEvent(int vkCode, bool isKeyDown, int configKey,
     return action;
   }
 
-  std::lock_guard<std::mutex> lock(g_stateMutex);
-
-  // Get previous state (default to false if not tracked)
-  bool wasKeyDown = false;
-  auto it = g_previousKeyState.find(vkCode);
-  if (it != g_previousKeyState.end()) {
-    wasKeyDown = it->second;
+  if (vkCode < 0 || vkCode >= 256) {
+    return action;
   }
 
-  // Update tracked state
-  g_previousKeyState[vkCode] = isKeyDown;
+  const bool wasKeyDown = g_previousKeyState[static_cast<size_t>(vkCode)]
+                              .exchange(isKeyDown, std::memory_order_relaxed);
 
   // Detect key-down edge (up -> down transition)
   bool keyDownEdge = isKeyDown && !wasKeyDown;
@@ -207,11 +206,9 @@ bool HandleBind(int vkCode, bool isKeyDown) {
   target->store(vkCode);
   if (vkCode >= 0 && vkCode < 256) {
     Globals::g_KeyInfo[vkCode].physicalKeyDown.store(true,
-                                                     std::memory_order_relaxed);
-  }
-  {
-    std::lock_guard<std::mutex> lock(g_stateMutex);
-    g_previousKeyState[vkCode] = true;
+                                                     std::memory_order_release);
+    g_previousKeyState[static_cast<size_t>(vkCode)].store(
+        true, std::memory_order_relaxed);
   }
   Config::SaveConfig();
 

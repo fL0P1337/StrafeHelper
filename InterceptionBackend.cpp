@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <array>
-#include <climits>
 #include <cstdio>
 #include <type_traits>
 
@@ -13,16 +12,6 @@ namespace {
 constexpr wchar_t kInterceptionDll[] = L"interception.dll";
 constexpr wchar_t kInterceptionDll64[] = L"interception64.dll";
 constexpr size_t kStrokeBatch = 32;
-
-[[nodiscard]] long ClampAddLong(long base, long delta) noexcept {
-  if (delta <= 0) {
-    return base;
-  }
-  if (base >= LONG_MAX - delta) {
-    return LONG_MAX;
-  }
-  return base + delta;
-}
 
 [[nodiscard]] long long QueryQpc() noexcept {
   LARGE_INTEGER qpc{};
@@ -69,11 +58,9 @@ bool InterceptionBackend::Initialize() noexcept {
     return false;
   }
 
-  {
-    std::lock_guard<std::mutex> lock(statusMutex_);
-    status_ = {};
-    status_.driverActive = true;
-  }
+  eventsCaptured_.store(0, std::memory_order_relaxed);
+  eventsDropped_.store(0, std::memory_order_relaxed);
+  eventsInjected_.store(0, std::memory_order_relaxed);
 
   running_.store(true, std::memory_order_relaxed);
   thread_ = std::thread([this]() { ThreadMain(); });
@@ -96,14 +83,12 @@ void InterceptionBackend::Shutdown() noexcept {
 
   initialized_ = false;
   lastKeyboardDevice_ = 0;
-  sequenceCounter_ = 0;
+  sequenceCounter_.store(0, std::memory_order_relaxed);
   keyboardDevices_.clear();
   callback_ = nullptr;
 
-  {
-    std::lock_guard<std::mutex> lock(statusMutex_);
-    status_ = {};
-  }
+  // Counters retained on shutdown so any final reads from GetStatus stay
+  // valid. They will be reset on the next Initialize() call.
 
   if (context_ && interceptionDestroyContext_) {
     interceptionDestroyContext_(context_);
@@ -160,17 +145,15 @@ bool InterceptionBackend::InjectKey(uint16_t scanCode,
     return false;
   }
 
-  {
-    std::lock_guard<std::mutex> lock(statusMutex_);
-    status_.eventsInjected = ClampAddLong(status_.eventsInjected, 1);
-  }
+  eventsInjected_.fetch_add(1, std::memory_order_relaxed);
   return true;
 }
 
 bool InterceptionBackend::GetStatus(BackendStatus &out) noexcept {
-  std::lock_guard<std::mutex> lock(statusMutex_);
-  status_.driverActive = context_ != nullptr;
-  out = status_;
+  out.driverActive = context_ != nullptr;
+  out.eventsCaptured = eventsCaptured_.load(std::memory_order_relaxed);
+  out.eventsDropped = eventsDropped_.load(std::memory_order_relaxed);
+  out.eventsInjected = eventsInjected_.load(std::memory_order_relaxed);
   return true;
 }
 
@@ -211,16 +194,13 @@ void InterceptionBackend::ThreadMain() noexcept {
       NEO_KEY_EVENT evt{};
       evt.scanCode = keyStroke->code;
       evt.flags = neoFlags;
-      evt.sequence = ++sequenceCounter_;
+      evt.sequence = sequenceCounter_.fetch_add(1, std::memory_order_relaxed) + 1;
       evt.timestampQpc = QueryQpc();
       evt.sourceDevice = device;
       evt.nativeState = keyStroke->state;
       evt.nativeInformation = keyStroke->information;
 
-      {
-        std::lock_guard<std::mutex> lock(statusMutex_);
-        status_.eventsCaptured = ClampAddLong(status_.eventsCaptured, 1);
-      }
+      eventsCaptured_.fetch_add(1, std::memory_order_relaxed);
 
       bool suppress = false;
       if (callback_) {
@@ -228,8 +208,7 @@ void InterceptionBackend::ThreadMain() noexcept {
       }
 
       if (suppress) {
-        std::lock_guard<std::mutex> lock(statusMutex_);
-        status_.eventsDropped = ClampAddLong(status_.eventsDropped, 1);
+        eventsDropped_.fetch_add(1, std::memory_order_relaxed);
       } else {
         (void)SendOnDevice(device, *keyStroke, false);
       }
@@ -370,8 +349,7 @@ bool InterceptionBackend::SendOnDevice(InterceptionDevice device,
   }
 
   if (countInjected) {
-    std::lock_guard<std::mutex> lock(statusMutex_);
-    status_.eventsInjected = ClampAddLong(status_.eventsInjected, 1);
+    eventsInjected_.fetch_add(1, std::memory_order_relaxed);
   }
   return true;
 }

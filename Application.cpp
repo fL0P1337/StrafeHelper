@@ -35,9 +35,7 @@ HWND g_hWindow = NULL;
 HINSTANCE g_hInstance = NULL;
 
 KeyState g_KeyInfo[256]; // Zero-initialized; atomics default to false.
-std::vector<int> g_activeSpamKeys;
-std::atomic<unsigned long long> g_spamKeysEpoch{0};
-std::mutex g_activeKeysMutex;
+std::atomic<uint32_t> g_lurchState{0};
 std::atomic<bool> g_isSpamActive{false};
 
 SuperglideStats g_superglideStats{};

@@ -58,9 +58,15 @@ private:
   std::atomic<DWORD> threadId_{0};
 
   EventCallback callback_ = nullptr;
-  std::mutex statusMutex_;
+
+  // Per-counter atomics so the LL-hook callback never blocks on a mutex.
+  // Windows enforces a hook-callback timeout (default 300 ms) and silently
+  // unregisters slow hooks; even a millisecond-scale mutex stall is a real
+  // risk under contention.
   std::atomic<uint32_t> sequenceCounter_{0};
-  BackendStatus status_{};
+  std::atomic<long> eventsCaptured_{0};
+  std::atomic<long> eventsDropped_{0};
+  std::atomic<long> eventsInjected_{0};
 
   StartupState startup_{};
 };

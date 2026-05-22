@@ -10,10 +10,8 @@ HINSTANCE g_hInstance = nullptr;
 
 // Fixed-size array matching the production definition.
 KeyState g_KeyInfo[256];
-std::vector<int> g_activeSpamKeys;
-std::atomic<unsigned long long> g_spamKeysEpoch = 0;
-std::mutex g_activeKeysMutex;
-std::atomic<bool> g_isSpamActive = false;
+std::atomic<uint32_t> g_lurchState{0};
+std::atomic<bool> g_isSpamActive{false};
 
 SuperglideStats g_superglideStats{};
 
