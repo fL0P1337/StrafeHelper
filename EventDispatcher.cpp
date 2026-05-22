@@ -55,7 +55,7 @@ bool HandleFeatureKeyEvent(int vkCode, bool isKeyDown) noexcept {
       OnSpamDeactivated(snapTapEnabled);
     }
     // Spam trigger key itself is never forwarded to the game.
-    return false;
+    return true;
   }
 
   // --- Turbo Loot ---

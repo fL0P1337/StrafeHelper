@@ -14,13 +14,14 @@
 #include <timeapi.h>
 #include <vector>
 #include <windows.h>
+#include <atomic>
 #pragma comment(lib, "winmm.lib")
 
 namespace {
 std::jthread g_spamThread;
 std::mutex g_spamCvMtx;
 std::condition_variable g_spamCv;
-bool g_spamCvFlag = false;
+std::atomic<bool> g_spamCvFlag{false};
 
 bool IsPhysicallyHeldMovementKey(int vkCode) {
   if (vkCode != 'W' && vkCode != 'A' && vkCode != 'S' && vkCode != 'D') {
@@ -54,7 +55,6 @@ void SpamThreadFunc(std::stop_token stopToken) {
 
     for (int vk : virtuallyDownKeys) {
       if (preserveHeldKeys && IsPhysicallyHeldMovementKey(vk)) {
-        // Transfer ownership to default handling without a forced key-up.
         continue;
       }
       keysToRelease.push_back(vk);
@@ -67,53 +67,64 @@ void SpamThreadFunc(std::stop_token stopToken) {
     virtuallyDownKeys.clear();
   };
 
-  while (!stopToken.stop_requested()) {
-    DWORD spamDelay = Config::SpamDelayMs.load(std::memory_order_relaxed);
-    DWORD waitTimeout = INFINITE;
+  auto interruptibleSleep = [&timer, &stopToken](DWORD ms) -> bool {
+    if (ms == 0) return true;
+    const LONGLONG start = PrecisionTimer::GetCurrentTicks();
+    const LONGLONG targetTick = start + timer.MsToTicks(ms);
+    const LONGLONG spinThreshold = timer.MsToTicks(0.5);
 
+    LONGLONG now = start;
+    while (now < targetTick) {
+      if (stopToken.stop_requested() || g_spamCvFlag.load(std::memory_order_relaxed)) {
+        return false;
+      }
+      const LONGLONG remaining = targetTick - now;
+      if (remaining > spinThreshold) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      } else {
+        YieldProcessor();
+      }
+      now = PrecisionTimer::GetCurrentTicks();
+    }
+    return true;
+  };
+
+  while (!stopToken.stop_requested()) {
     bool shouldBeActive =
         Globals::g_isSpamActive.load(std::memory_order_relaxed) &&
         Config::EnableSpam.load(std::memory_order_relaxed);
 
-    if (shouldBeActive) {
-      unsigned long long ignoredEpoch = 0;
-      GetSpamSnapshot(localActiveKeys, ignoredEpoch);
-      const bool keysCurrentlyActive = !localActiveKeys.empty();
+    unsigned long long epochBeforeWait = 0;
+    GetSpamSnapshot(localActiveKeys, epochBeforeWait);
+    bool keysCurrentlyActive = !localActiveKeys.empty();
 
-      if (keysCurrentlyActive) {
-        waitTimeout = ApplyJitter(spamDelay);
-      }
+    if (!shouldBeActive || !keysCurrentlyActive) {
+      std::unique_lock<std::mutex> cvLock(g_spamCvMtx);
+      g_spamCv.wait(cvLock, [&stopToken]() { 
+          return g_spamCvFlag.load(std::memory_order_relaxed) || stopToken.stop_requested(); 
+      });
+      g_spamCvFlag.store(false, std::memory_order_relaxed);
+      releaseVirtuallyDownKeys(true);
+      continue;
     }
 
-    if (waitTimeout == INFINITE) {
-      std::unique_lock<std::mutex> cvLock(g_spamCvMtx);
-      g_spamCv.wait(cvLock, [&stopToken]() { return g_spamCvFlag || stopToken.stop_requested(); });
-      g_spamCvFlag = false;
-    } else {
-      const LONGLONG start = PrecisionTimer::GetCurrentTicks();
-      const LONGLONG targetTick = start + timer.MsToTicks(waitTimeout);
-      const LONGLONG spinThreshold = timer.MsToTicks(0.5);
+    g_spamCvFlag.store(false, std::memory_order_relaxed);
 
-      LONGLONG now;
-      do {
-        now = PrecisionTimer::GetCurrentTicks();
-        if (stopToken.stop_requested())
-          break;
-        const LONGLONG remaining = targetTick - now;
-        if (remaining > spinThreshold) {
-          std::unique_lock<std::mutex> cvLock(g_spamCvMtx);
-          if (g_spamCv.wait_for(cvLock, std::chrono::milliseconds(1), []() { return g_spamCvFlag; })) {
-            g_spamCvFlag = false;
-            break;
-          }
-        } else if (remaining > 0) {
-          std::unique_lock<std::mutex> cvLock(g_spamCvMtx);
-          if (g_spamCv.wait_for(cvLock, std::chrono::microseconds(0), []() { return g_spamCvFlag; })) {
-            g_spamCvFlag = false;
-            break;
-          }
-        }
-      } while (now < targetTick);
+    if (Globals::g_spamKeysEpoch.load(std::memory_order_relaxed) != epochBeforeWait) {
+      continue;
+    }
+
+    SendKeyInputBatch(localActiveKeys, true);
+    virtuallyDownKeys = localActiveKeys;
+
+    DWORD keyDownDuration = ApplyJitter(Config::SpamKeyDownDurationMs.load(std::memory_order_relaxed));
+    if (keyDownDuration > 0) {
+      if (!interruptibleSleep(keyDownDuration)) {
+        bool shouldBeActiveNow = Globals::g_isSpamActive.load(std::memory_order_relaxed) &&
+                                 Config::EnableSpam.load(std::memory_order_relaxed);
+        releaseVirtuallyDownKeys(!shouldBeActiveNow);
+        continue;
+      }
     }
 
     if (stopToken.stop_requested()) {
@@ -121,56 +132,17 @@ void SpamThreadFunc(std::stop_token stopToken) {
       break;
     }
 
-    shouldBeActive = Globals::g_isSpamActive.load(std::memory_order_relaxed) &&
-                     Config::EnableSpam.load(std::memory_order_relaxed);
-
-    if (!shouldBeActive) {
-      releaseVirtuallyDownKeys(true);
-      continue;
-    }
-
-    // Always release keys that this thread previously drove down.
     releaseVirtuallyDownKeys(false);
 
-    unsigned long long ignoredEpoch = 0;
-    GetSpamSnapshot(localActiveKeys, ignoredEpoch);
-    if (localActiveKeys.empty()) {
-      continue;
-    }
-
-    DWORD keyDownDuration = ApplyJitter(
-        Config::SpamKeyDownDurationMs.load(std::memory_order_relaxed));
-    if (keyDownDuration > 0) {
-      if (!timer.PreciseSleep(keyDownDuration, stopToken)) {
-        releaseVirtuallyDownKeys(false);
-        break;
+    DWORD spamDelay = ApplyJitter(Config::SpamDelayMs.load(std::memory_order_relaxed));
+    if (spamDelay > 0) {
+      if (!interruptibleSleep(spamDelay)) {
+        continue;
       }
     }
-
-    shouldBeActive = Globals::g_isSpamActive.load(std::memory_order_relaxed) &&
-                     Config::EnableSpam.load(std::memory_order_relaxed);
-    if (!shouldBeActive) {
-      continue;
-    }
-
-    unsigned long long epochBeforeDown = 0;
-    GetSpamSnapshot(localActiveKeys, epochBeforeDown);
-
-    if (localActiveKeys.empty()) {
-      continue;
-    }
-
-    if (Globals::g_spamKeysEpoch.load(std::memory_order_relaxed) !=
-        epochBeforeDown) {
-      continue;
-    }
-
-    SendKeyInputBatch(localActiveKeys, true);
-    virtuallyDownKeys = localActiveKeys;
   }
 
   releaseVirtuallyDownKeys(false);
-
   timeEndPeriod(1);
   Logger::GetInstance().Log("Spam thread exiting.");
 }
@@ -180,10 +152,6 @@ void SendKeyInputBatch(const std::vector<int> &keys, bool keyDown) {
   if (keys.empty())
     return;
 
-  // Send all keys in a single SendInput call so the batch is atomic from the
-  // OS's perspective.  The previous one-by-one InjectKey approach allowed the
-  // hook callback to interleave between individual keys (e.g. processing an
-  // autorepeat W between W-down and D-down), corrupting the expected sequence.
   std::vector<INPUT> inputs(keys.size());
   for (size_t i = 0; i < keys.size(); ++i) {
     inputs[i].type = INPUT_KEYBOARD;
@@ -271,9 +239,9 @@ void StopSpamThread() {
 }
 
 void TriggerSpamEvent() noexcept {
+  g_spamCvFlag.store(true, std::memory_order_relaxed);
   {
     std::lock_guard<std::mutex> lock(g_spamCvMtx);
-    g_spamCvFlag = true;
   }
   g_spamCv.notify_all();
 }
