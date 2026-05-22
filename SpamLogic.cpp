@@ -177,9 +177,23 @@ void SpamThreadFunc(std::stop_token stopToken) {
 } // namespace
 
 void SendKeyInputBatch(const std::vector<int> &keys, bool keyDown) {
-  for (int key : keys) {
-    InjectKey(key, keyDown);
+  if (keys.empty())
+    return;
+
+  // Send all keys in a single SendInput call so the batch is atomic from the
+  // OS's perspective.  The previous one-by-one InjectKey approach allowed the
+  // hook callback to interleave between individual keys (e.g. processing an
+  // autorepeat W between W-down and D-down), corrupting the expected sequence.
+  std::vector<INPUT> inputs(keys.size());
+  for (size_t i = 0; i < keys.size(); ++i) {
+    inputs[i].type = INPUT_KEYBOARD;
+    inputs[i].ki.wVk = 0;
+    inputs[i].ki.wScan = VirtualKeyToScanCode(keys[i]);
+    inputs[i].ki.dwFlags = VirtualKeyInputFlags(keys[i], keyDown);
+    inputs[i].ki.time = 0;
+    inputs[i].ki.dwExtraInfo = NEO_SYNTHETIC_INFORMATION;
   }
+  SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
 }
 
 void CleanupSpamState(bool restoreHeldKeys) {

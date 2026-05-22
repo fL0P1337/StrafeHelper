@@ -233,8 +233,12 @@ bool HandleMovementKeyState(int vkCode, bool isKeyDown,
 
   if (spamActive) {
     // Spam layer keeps movement keys virtually UP and spams the active key(s).
+    // NOTE: We intentionally do NOT inject a key-up here.  The physical event
+    // is already suppressed (return true), and OnSpamActivated() already sent
+    // key-up for any keys that were held when spam started.  Injecting an
+    // extra key-up on every event (including autorepeat) races with the spam
+    // thread's own down/up cycle and can leave keys stuck in the target app.
     ApplySnapTapOutput_Locked(true);
-    SendKeyUpImmediate(vkCode);
     PublishSpamKeysFromState_Locked(snapTapEnabled);
     return true;
   }
