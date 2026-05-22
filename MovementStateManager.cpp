@@ -6,9 +6,7 @@
 #include "KeybindManager.h"
 #include "SpamLogic.h"
 #include "Utils.h"
-#include <algorithm>
 #include <mutex>
-#include <vector>
 #include <windows.h>
 
 namespace {
@@ -129,46 +127,61 @@ void ApplySnapTapOutput_Locked(bool spamActive) {
 }
 
 // NOTE: Must be called with g_axisMutex held.
-std::vector<int> BuildDesiredSpamKeys_Locked(bool snapTapEnabled) {
-  std::vector<int> keys;
-  keys.reserve(2);
+//
+// Builds the WASD bitmask the spam thread should currently spam. With
+// SnapTap on, that's the per-axis "winner" (LIFO last-pressed). With
+// SnapTap off, every physically-held WASD key is spammed.
+[[nodiscard]] uint32_t BuildDesiredSpamMask_Locked(bool snapTapEnabled) {
+  uint32_t mask = 0u;
 
   if (snapTapEnabled) {
-    if (g_axisX.activeKey != 0)
-      keys.push_back(g_axisX.activeKey);
-    if (g_axisY.activeKey != 0)
-      keys.push_back(g_axisY.activeKey);
+    mask |= Globals::LurchBitForVk(g_axisX.activeKey);
+    mask |= Globals::LurchBitForVk(g_axisY.activeKey);
   } else {
     for (int key : {'W', 'A', 'S', 'D'}) {
       if (Globals::g_KeyInfo[key].physicalKeyDown.load(
-              std::memory_order_relaxed)) {
-        keys.push_back(key);
+              std::memory_order_acquire)) {
+        mask |= Globals::LurchBitForVk(key);
       }
     }
   }
-
-  return keys;
+  return mask;
 }
 
 // NOTE: Must be called with g_axisMutex held.
+//
+// Atomically publishes the new desired mask into `g_lurchState`, bumping
+// the epoch only when the key bits actually change. On a change, also
+// updates the per-key `spamming` flag and signals the spam CV.
+//
+// All publish work is mutex-free: spammers see a single 32-bit atomic.
 void PublishSpamKeysFromState_Locked(bool snapTapEnabled) {
-  const std::vector<int> desiredKeys = BuildDesiredSpamKeys_Locked(snapTapEnabled);
+  const uint32_t desiredKeys = BuildDesiredSpamMask_Locked(snapTapEnabled);
+
+  uint32_t prev = Globals::g_lurchState.load(std::memory_order_acquire);
+  uint32_t next = 0u;
   bool changed = false;
+  do {
+    const uint32_t prevKeys = prev & Globals::kLurchKeyMask;
+    if (prevKeys == desiredKeys) {
+      changed = false;
+      next = prev;
+      break;
+    }
+    const uint32_t epoch =
+        (prev & ~Globals::kLurchKeyMask) + Globals::kLurchEpochInc;
+    next = (epoch & ~Globals::kLurchKeyMask) | desiredKeys;
+    changed = true;
+  } while (!Globals::g_lurchState.compare_exchange_weak(
+      prev, next, std::memory_order_acq_rel, std::memory_order_acquire));
 
-  {
-    std::lock_guard<std::mutex> lock(Globals::g_activeKeysMutex);
-    if (Globals::g_activeSpamKeys != desiredKeys) {
-      Globals::g_activeSpamKeys = desiredKeys;
-      Globals::g_spamKeysEpoch.fetch_add(1ULL, std::memory_order_relaxed);
-      changed = true;
-    }
-
-    for (int key : {'W', 'A', 'S', 'D'}) {
-      Globals::g_KeyInfo[key].spamming.store(false, std::memory_order_relaxed);
-    }
-    for (int vk : desiredKeys) {
-      Globals::g_KeyInfo[vk].spamming.store(true, std::memory_order_relaxed);
-    }
+  // Mirror the bitmask onto the per-key `spamming` flag. This isn't on
+  // the spam thread's hot path — it's only used by GUI / cleanup logic.
+  for (int key : {'W', 'A', 'S', 'D'}) {
+    const bool spamming =
+        (desiredKeys & Globals::LurchBitForVk(key)) != 0u;
+    Globals::g_KeyInfo[key].spamming.store(spamming,
+                                           std::memory_order_relaxed);
   }
 
   if (changed) {
@@ -179,7 +192,7 @@ void PublishSpamKeysFromState_Locked(bool snapTapEnabled) {
 void SendKeyUpForPhysicallyHeldWasd() {
   for (int key : {'W', 'A', 'S', 'D'}) {
     if (Globals::g_KeyInfo[key].physicalKeyDown.load(
-            std::memory_order_relaxed)) {
+            std::memory_order_acquire)) {
       InjectKey(key, false);
     }
   }
@@ -188,7 +201,7 @@ void SendKeyUpForPhysicallyHeldWasd() {
 void SendKeyDownForPhysicallyHeldWasd() {
   for (int key : {'W', 'A', 'S', 'D'}) {
     if (Globals::g_KeyInfo[key].physicalKeyDown.load(
-            std::memory_order_relaxed)) {
+            std::memory_order_acquire)) {
       InjectKey(key, true);
     }
   }
@@ -257,7 +270,7 @@ void OnSnapTapToggled(bool enabled) {
   const bool spamFeatureEnabled =
       Config::EnableSpam.load(std::memory_order_relaxed);
   const bool spamActive =
-      Globals::g_isSpamActive.load(std::memory_order_relaxed) &&
+      Globals::g_isSpamActive.load(std::memory_order_acquire) &&
       spamFeatureEnabled;
 
   std::lock_guard<std::mutex> lock(g_axisMutex);
@@ -291,7 +304,7 @@ void RefreshMovementState() {
   const bool snapTapEnabled =
       Config::EnableSnapTap.load(std::memory_order_relaxed);
   const bool spamActive =
-      Globals::g_isSpamActive.load(std::memory_order_relaxed) &&
+      Globals::g_isSpamActive.load(std::memory_order_acquire) &&
       spamFeatureEnabled;
 
   std::lock_guard<std::mutex> lock(g_axisMutex);

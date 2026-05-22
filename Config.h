@@ -68,6 +68,12 @@ extern std::atomic<bool> SuperglideToggleActive;
 extern std::atomic<bool> EnableJitter;
 extern std::atomic<int> JitterMs; // max +/- offset applied to each delay cycle
 
+// Per-key debounce window (microseconds). When > 0, opposite-edge transitions
+// arriving within this window of the previous edge are dropped as bounce /
+// driver echo. Default 500 µs — well below the threshold of human dexterity
+// (~10 ms) but above typical mechanical-switch debounce time (~50 µs).
+extern std::atomic<int> DebounceUs;
+
 // Function to load configuration
 void LoadConfig();
 void SaveConfig();

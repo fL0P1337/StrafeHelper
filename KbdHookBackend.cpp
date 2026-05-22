@@ -33,11 +33,9 @@ bool KbdHookBackend::Initialize() noexcept {
     return false;
   }
 
-  {
-    std::lock_guard<std::mutex> sLock(statusMutex_);
-    status_ = {};
-    status_.driverActive = true;
-  }
+  eventsCaptured_.store(0, std::memory_order_relaxed);
+  eventsDropped_.store(0, std::memory_order_relaxed);
+  eventsInjected_.store(0, std::memory_order_relaxed);
 
   return true;
 }
@@ -52,11 +50,6 @@ void KbdHookBackend::Shutdown() noexcept {
 
   if (thread_.joinable()) {
     thread_.join();
-  }
-
-  {
-    std::lock_guard<std::mutex> lock(statusMutex_);
-    status_.driverActive = false;
   }
 
   threadId_.store(0, std::memory_order_relaxed);
@@ -89,17 +82,15 @@ bool KbdHookBackend::InjectKey(uint16_t scanCode, uint16_t flags) noexcept {
     return false;
   }
 
-  {
-    std::lock_guard<std::mutex> lock(statusMutex_);
-    ++status_.eventsInjected;
-  }
+  eventsInjected_.fetch_add(1, std::memory_order_relaxed);
   return true;
 }
 
 bool KbdHookBackend::GetStatus(BackendStatus &out) noexcept {
-  std::lock_guard<std::mutex> lock(statusMutex_);
-  out = status_;
   out.driverActive = running_.load(std::memory_order_relaxed);
+  out.eventsCaptured = eventsCaptured_.load(std::memory_order_relaxed);
+  out.eventsDropped = eventsDropped_.load(std::memory_order_relaxed);
+  out.eventsInjected = eventsInjected_.load(std::memory_order_relaxed);
   return true;
 }
 
@@ -146,18 +137,12 @@ LRESULT CALLBACK KbdHookBackend::HookProc(int nCode, WPARAM wParam,
   evt.nativeState = 0;
   evt.nativeInformation = static_cast<uint32_t>(kbd->dwExtraInfo);
 
-  {
-    std::lock_guard<std::mutex> lock(instance_->statusMutex_);
-    ++instance_->status_.eventsCaptured;
-  }
+  instance_->eventsCaptured_.fetch_add(1, std::memory_order_relaxed);
 
   if (instance_->callback_) {
     const bool suppress = instance_->callback_(evt);
     if (suppress) {
-      {
-        std::lock_guard<std::mutex> lock(instance_->statusMutex_);
-        ++instance_->status_.eventsDropped;
-      }
+      instance_->eventsDropped_.fetch_add(1, std::memory_order_relaxed);
       return 1; // Suppress event from reaching the rest of OS hook chain
     }
   }

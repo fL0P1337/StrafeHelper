@@ -145,6 +145,7 @@ namespace Keys {
   constexpr const char* kSuperglideMode        = "superglide_mode";
   constexpr const char* kEnableJitter          = "enable_jitter";
   constexpr const char* kJitterMs              = "jitter_ms";
+  constexpr const char* kDebounceUs            = "debounce_us";
 } // namespace Keys
 
 // --- Definitions of extern variables from Config.h ---
@@ -217,6 +218,9 @@ std::atomic<bool> SuperglideToggleActive{false};
 // Delay jitter
 std::atomic<bool> EnableJitter{false};
 std::atomic<int> JitterMs{3};
+
+// Edge-debounce window in microseconds (per VK). 0 disables.
+std::atomic<int> DebounceUs{500};
 
 // --- Implementation of LoadConfig ---
 void LoadConfig() {
@@ -346,6 +350,11 @@ void LoadConfig() {
         if (v >= 0)
           JitterMs = v;
       }
+      else if (key == Keys::kDebounceUs) {
+        int v = std::stoi(value);
+        if (v >= 0)
+          DebounceUs = v;
+      }
     } catch (const std::exception &e) {
       Logger::GetInstance().Log("Warning: Invalid config value on line " +
                                 std::to_string(lineNumber) + " for key '" +
@@ -437,6 +446,7 @@ void SaveConfig() {
       {Keys::kSuperglideMode,    std::to_string(static_cast<int>(KeybindMode::Hold)), false},
       {Keys::kEnableJitter,      EnableJitter.load() ? "true" : "false", false},
       {Keys::kJitterMs,          std::to_string(JitterMs.load()), false},
+      {Keys::kDebounceUs,        std::to_string(DebounceUs.load()), false},
   };
 
   auto trim = [](std::string &s) {

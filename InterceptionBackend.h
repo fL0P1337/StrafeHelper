@@ -9,7 +9,6 @@
 #include <vector>
 #include <thread>
 #include <atomic>
-#include <mutex>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -84,9 +83,12 @@ private:
   std::thread thread_;
   std::atomic<bool> running_{false};
   EventCallback callback_ = nullptr;
-  std::mutex statusMutex_;
-  
-  uint32_t sequenceCounter_ = 0;
-  BackendStatus status_{};
+
+  // Atomic counters so neither the polling thread nor InjectKey ever takes
+  // a mutex on the input hot path.
+  std::atomic<uint32_t> sequenceCounter_{0};
+  std::atomic<long> eventsCaptured_{0};
+  std::atomic<long> eventsDropped_{0};
+  std::atomic<long> eventsInjected_{0};
   bool initialized_ = false;
 };
