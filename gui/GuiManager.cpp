@@ -685,7 +685,7 @@ void GuiManager::RenderConsoleContent() {
   }
   ImGui::Separator();
 
-  static uint64_t cachedGeneration = std::numeric_limits<uint64_t>::max();
+  static uint64_t cachedGeneration = (std::numeric_limits<uint64_t>::max)();
   static std::string fullLog;
   const uint64_t generation = Logger::GetInstance().GetGeneration();
   if (generation != cachedGeneration) {
