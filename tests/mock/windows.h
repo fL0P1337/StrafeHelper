@@ -23,6 +23,7 @@ typedef int BOOL;
 typedef long LONG;
 typedef long LRESULT;
 typedef long long LONGLONG;
+typedef unsigned long long ULONGLONG;
 typedef char* LPSTR;
 typedef unsigned long ULONG_PTR;
 typedef ULONG_PTR WPARAM;
@@ -146,6 +147,13 @@ inline int QueryPerformanceCounter(LARGE_INTEGER *lpPerformanceCount) {
 }
 inline void Sleep(DWORD dwMilliseconds) {
     std::this_thread::sleep_for(std::chrono::milliseconds(dwMilliseconds));
+}
+inline ULONGLONG GetTickCount64() {
+    return static_cast<ULONGLONG>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+inline void YieldProcessor() {
+    std::this_thread::yield();
 }
 
 // MapVirtualKeyW mock

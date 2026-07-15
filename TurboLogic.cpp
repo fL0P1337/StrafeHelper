@@ -69,18 +69,18 @@ void RunTurboLoop(std::stop_token stopToken,
       continue;
 
     const int key = configKey.load(std::memory_order_relaxed);
-
-    InjectKey(key, true);
+    if (!InjectKey(key, true)) {
+      continue;
+    }
 
     DWORD duration =
         ApplyJitter(configDuration.load(std::memory_order_relaxed));
-    if (duration > 0) {
-      if (!timer.PreciseSleep(duration, stopToken)) {
-        break;
-      }
+    if (duration > 0 && !timer.PreciseSleep(duration, stopToken)) {
+      (void)InjectKey(key, false);
+      break;
     }
 
-    InjectKey(key, false);
+    (void)InjectKey(key, false);
   }
 
   timeEndPeriod(1);

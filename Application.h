@@ -3,6 +3,7 @@
 
 #include "Config.h"
 #include "InputBackend.h"
+#include <cstddef>
 #include <windows.h>
 
 bool InitializeApplication(HINSTANCE hInstance);
@@ -17,3 +18,4 @@ bool SwitchBackend(Config::InputBackendKind kind);
 bool DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept;
 bool GetActiveBackendStatus(BackendStatus &out) noexcept;
 bool InjectKey(int vk, bool keyDown) noexcept;
+bool InjectKeys(const int *keys, std::size_t count, bool keyDown) noexcept;

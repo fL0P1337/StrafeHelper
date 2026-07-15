@@ -319,3 +319,44 @@ void RefreshMovementState() {
     PublishSpamKeysFromState_Locked(snapTapEnabled);
   }
 }
+void PrepareMovementStateForBackendSwitch() {
+  std::lock_guard<std::mutex> lock(g_axisMutex);
+  ReleaseSnapTapVirtualKeys_Locked();
+  Globals::g_isSpamActive.store(false, std::memory_order_release);
+  Globals::g_lurchState.store(0, std::memory_order_release);
+  for (int key : {'W', 'A', 'S', 'D'}) {
+    Globals::g_KeyInfo[key].spamming.store(false, std::memory_order_relaxed);
+  }
+}
+
+void ReconcileMovementStateAfterBackendSwitch() {
+  std::lock_guard<std::mutex> lock(g_axisMutex);
+
+  g_axisX = {};
+  g_axisY = {};
+  g_virtualAxisX = 0;
+  g_virtualAxisY = 0;
+  Globals::g_isSpamActive.store(false, std::memory_order_release);
+  Globals::g_lurchState.store(0, std::memory_order_release);
+
+  for (int vk = 0; vk < 256; ++vk) {
+    const bool isDown = (GetAsyncKeyState(vk) & 0x8000) != 0;
+    Globals::g_KeyInfo[vk].physicalKeyDown.store(isDown,
+                                                  std::memory_order_release);
+    Globals::g_KeyInfo[vk].spamming.store(false, std::memory_order_relaxed);
+    Globals::g_KeyInfo[vk].lastEdgeNs.store(0, std::memory_order_relaxed);
+  }
+
+  for (int key : {'W', 'A', 'S', 'D'}) {
+    if (Globals::g_KeyInfo[key].physicalKeyDown.load(std::memory_order_acquire)) {
+      if (AxisState *axis = AxisForVk(key)) {
+        AxisOnKeyDown(*axis, key);
+      }
+    }
+  }
+
+  if (Config::EnableSnapTap.load(std::memory_order_relaxed)) {
+    SendKeyUpForPhysicallyHeldWasd();
+    ApplySnapTapOutput_Locked(false);
+  }
+}

@@ -21,6 +21,7 @@ public:
     template <typename StopToken>
     bool PreciseSleepUntil(LONGLONG targetTick, const StopToken& stopToken) const noexcept {
         const LONGLONG spinThreshold = m_frequency / 2000LL; // 0.5 ms in ticks
+        const LONGLONG sleepQuantum = m_frequency / 1000LL;  // 1 ms in ticks
         LONGLONG now = GetCurrentTicks();
 
         while (now < targetTick) {
@@ -31,8 +32,10 @@ public:
             }
 
             const LONGLONG remaining = targetTick - now;
-            if (remaining > spinThreshold) {
+            if (remaining > spinThreshold + sleepQuantum) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } else {
+                YieldProcessor();
             }
 
             now = GetCurrentTicks();

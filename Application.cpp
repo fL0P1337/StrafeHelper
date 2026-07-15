@@ -21,6 +21,7 @@
 #include "KbdHookBackend.h"
 #include "KeybindManager.h"
 #include "Logger.h"
+#include "MovementStateManager.h"
 #include "SpamLogic.h"
 #include "SuperglideLogic.h"
 #include "TurboLogic.h"
@@ -101,13 +102,22 @@ void HandleSideMouseButton(int vkCode, bool isDown) {
 // SwitchBackend — callable from the GUI thread at runtime.
 // -----------------------------------------------------------------------
 bool SwitchBackend(Config::InputBackendKind kind) {
-  std::unique_ptr<InputBackend> previousBackend;
   {
     std::lock_guard<std::mutex> lock(g_backendMutex);
     if (g_activeBackend && g_hasActiveBackendKind &&
         g_activeBackendKind == kind) {
       return true;
     }
+  }
+
+  PrepareMovementStateForBackendSwitch();
+  Config::KeySpamTriggerToggleActive.store(false, std::memory_order_relaxed);
+  Config::TurboLootToggleActive.store(false, std::memory_order_relaxed);
+  Config::TurboJumpToggleActive.store(false, std::memory_order_relaxed);
+
+  std::unique_ptr<InputBackend> previousBackend;
+  {
+    std::lock_guard<std::mutex> lock(g_backendMutex);
     previousBackend = std::move(g_activeBackend);
     g_hasActiveBackendKind = false;
   }
@@ -146,6 +156,10 @@ bool SwitchBackend(Config::InputBackendKind kind) {
     g_activeBackendKind = kind;
     g_hasActiveBackendKind = true;
   }
+  ReconcileMovementStateAfterBackendSwitch();
+  TriggerSpamEvent();
+  TriggerTurboLoot();
+  TriggerTurboJump();
   Config::SelectedBackend.store(static_cast<int>(kind));
   Config::SaveConfig();
   Logger::GetInstance().Log("[SwitchBackend] Switched to " + backendName);
@@ -269,24 +283,36 @@ void CleanupApplication() {
 }
 
 // -----------------------------------------------------------------------
-// InjectKey — the single injection point used by all feature threads.
-// Acquires the backend mutex, looks up the scan code, and calls the
-// backend's InjectKey method.
+// InjectKey / InjectKeys — injection points used by all feature threads.
+// Hold the backend mutex across each logical batch so runtime switching cannot
+// split a batch across two backend instances.
 // -----------------------------------------------------------------------
-bool InjectKey(int vk, bool keyDown) noexcept {
-  uint16_t flags = 0;
-  if (!keyDown) {
-    flags |= NEO_KEY_BREAK;
+bool InjectKeys(const int *keys, std::size_t count, bool keyDown) noexcept {
+  if (!keys || count == 0) {
+    return true;
   }
-  const UINT scanCode = MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC_EX);
-  if ((scanCode & 0xFF00u) == 0xE000u) {
-    flags |= NEO_KEY_E0;
-  }
-  const uint16_t sc = static_cast<uint16_t>(scanCode & 0xFFu);
 
   std::lock_guard<std::mutex> lock(g_backendMutex);
-  if (g_activeBackend) {
-    return g_activeBackend->InjectKey(sc, flags);
+  if (!g_activeBackend) {
+    return false;
   }
-  return false;
+
+  bool allInjected = true;
+  for (std::size_t i = 0; i < count; ++i) {
+    uint16_t flags = keyDown ? 0 : NEO_KEY_BREAK;
+    const UINT scanCode =
+        MapVirtualKeyW(static_cast<UINT>(keys[i]), MAPVK_VK_TO_VSC_EX);
+    if ((scanCode & 0xFF00u) == 0xE000u) {
+      flags |= NEO_KEY_E0;
+    }
+    const uint16_t sc = static_cast<uint16_t>(scanCode & 0xFFu);
+    if (sc == 0 || !g_activeBackend->InjectKey(sc, flags)) {
+      allInjected = false;
+    }
+  }
+  return allInjected;
+}
+
+bool InjectKey(int vk, bool keyDown) noexcept {
+  return InjectKeys(&vk, 1, keyDown);
 }

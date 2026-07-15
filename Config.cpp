@@ -4,10 +4,14 @@
 #include "Config.h"
 #include "Logger.h"
 #include "Utils.h"
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
+#include <iterator>
 #include <mutex>
 #include <string>
+#include <stdexcept>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -38,10 +42,27 @@ std::string NormalizeKeyName(const std::string& value) {
   return normalized;
 }
 
+bool ParseBoolValue(const std::string &value) {
+  std::string normalized = TrimCopy(value);
+  std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  if (normalized == "true" || normalized == "1") {
+    return true;
+  }
+  if (normalized == "false" || normalized == "0") {
+    return false;
+  }
+  throw std::invalid_argument("expected true/false/1/0");
+}
+
 int ParseKeyValue(const std::string &value, int fallback) {
   const std::string trimmed = TrimCopy(value);
   if (trimmed.empty()) {
     return fallback;
+  }
+  const std::string normalized = NormalizeKeyName(trimmed);
+  if (normalized == "none" || normalized == "unbound") {
+    return 0;
   }
   if (trimmed.length() == 1 &&
       std::isalnum(static_cast<unsigned char>(trimmed[0]))) {
@@ -49,7 +70,7 @@ int ParseKeyValue(const std::string &value, int fallback) {
         std::toupper(static_cast<unsigned char>(trimmed[0])));
   }
 
-  const std::string key = NormalizeKeyName(trimmed);
+  const std::string key = normalized;
   struct KeyAlias {
     const char *name;
     int vk;
@@ -87,6 +108,9 @@ int ParseKeyValue(const std::string &value, int fallback) {
 }
 
 std::string FormatConfigKey(int vk) {
+  if (vk == 0) {
+    return "None";
+  }
   if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) {
     return std::string(1, static_cast<char>(vk));
   }
@@ -118,6 +142,77 @@ std::string FormatConfigKey(int vk) {
     return "XButton2";
   default:
     return std::to_string(vk);
+  }
+}
+void ValidateConfigValues() {
+  auto clampInt = [](std::atomic<int> &value, int minimum, int maximum,
+                     const char *name) {
+    const int current = value.load(std::memory_order_relaxed);
+    const int corrected = std::clamp(current, minimum, maximum);
+    if (corrected != current) {
+      value.store(corrected, std::memory_order_relaxed);
+      Logger::GetInstance().Log(std::string("Warning: Clamped ") + name +
+                                " to " + std::to_string(corrected));
+    }
+  };
+
+  clampInt(SpamDelayMs, 0, 1000, "spam_delay_ms");
+  clampInt(SpamKeyDownDurationMs, 0, 1000, "spam_key_down_duration");
+  clampInt(TurboLootDelayMs, 0, 1000, "turbo_loot_delay");
+  clampInt(TurboLootDurationMs, 0, 1000, "turbo_loot_duration");
+  clampInt(TurboJumpDelayMs, 0, 1000, "turbo_jump_delay");
+  clampInt(TurboJumpDurationMs, 0, 1000, "turbo_jump_duration");
+  clampInt(JitterMs, 0, 1000, "jitter_ms");
+  clampInt(DebounceUs, 0, 1000000, "debounce_us");
+
+  const double fps = TargetFPS.load(std::memory_order_relaxed);
+  if (!std::isfinite(fps) || fps < 30.0 || fps > 300.0) {
+    TargetFPS.store(60.0, std::memory_order_relaxed);
+    Logger::GetInstance().Log(
+        "Warning: target_fps must be finite and within 30..300; reset to 60.");
+  }
+
+  struct Binding {
+    std::atomic<int> *key;
+    std::atomic<bool> *enabled;
+    int fallback;
+    const char *name;
+  };
+  Binding bindings[] = {
+      {&KeySpamTrigger, &EnableSpam, 'C', "Lurch Trigger"},
+      {&TurboLootKey, &EnableTurboLoot, 'E', "Turbo Loot"},
+      {&TurboJumpKey, &EnableTurboJump, VK_SPACE, "Turbo Jump"},
+      {&SuperglideBind, &EnableSuperglide, VK_OEM_3, "Superglide"},
+  };
+
+  for (auto &binding : bindings) {
+    const int vk = binding.key->load(std::memory_order_relaxed);
+    const bool enabled = binding.enabled->load(std::memory_order_relaxed);
+    if (vk == 0 && !enabled) {
+      continue;
+    }
+    if (vk <= 0 || vk >= 256) {
+      binding.key->store(binding.fallback, std::memory_order_relaxed);
+      Logger::GetInstance().Log(std::string("Warning: Invalid keybind for ") +
+                                binding.name + "; restored default.");
+    }
+  }
+
+  for (size_t i = 0; i < std::size(bindings); ++i) {
+    if (!bindings[i].enabled->load(std::memory_order_relaxed)) {
+      continue;
+    }
+    const int vk = bindings[i].key->load(std::memory_order_relaxed);
+    for (size_t j = 0; j < i; ++j) {
+      if (bindings[j].enabled->load(std::memory_order_relaxed) &&
+          bindings[j].key->load(std::memory_order_relaxed) == vk) {
+        bindings[i].enabled->store(false, std::memory_order_relaxed);
+        Logger::GetInstance().Log(std::string("Warning: Disabled ") +
+                                  bindings[i].name + " because its key conflicts with " +
+                                  bindings[j].name + ".");
+        break;
+      }
+    }
   }
 }
 } // namespace
@@ -226,6 +321,10 @@ std::atomic<int> JitterMs{3};
 // Edge-debounce window in microseconds (per VK). 0 disables.
 std::atomic<int> DebounceUs{500};
 
+void ValidateConfig() {
+  ValidateConfigValues();
+}
+
 // --- Implementation of LoadConfig ---
 void LoadConfig() {
   std::lock_guard<std::mutex> ioLock(g_configIoMutex);
@@ -279,7 +378,7 @@ void LoadConfig() {
     try {
       // Legacy key migration
       if (key == "isWASDStrafingEnabled") {
-        legacyEnableSpam = (value == "true" || value == "1");
+        legacyEnableSpam = ParseBoolValue(value);
       }
       // Legacy SCREAMING_SNAKE keys (kept for backward compat)
       else if (key == "SPAM_DELAY_MS" || key == Keys::kSpamDelayMs)
@@ -287,13 +386,13 @@ void LoadConfig() {
       else if (key == "SPAM_KEY_DOWN_DURATION" || key == Keys::kSpamKeyDownDuration)
         SpamKeyDownDurationMs = std::stoi(value);
       else if (key == "isLocked" || key == Keys::kIsLocked)
-        IsLocked = (value == "true" || value == "1");
+        IsLocked = ParseBoolValue(value);
       else if (key == Keys::kEnableSpam) {
-        EnableSpam = (value == "true" || value == "1");
+        EnableSpam = ParseBoolValue(value);
         hasEnableSpam = true;
       }
       else if (key == Keys::kEnableSnapTap)
-        EnableSnapTap = (value == "true" || value == "1");
+        EnableSnapTap = ParseBoolValue(value);
       else if (key == "KEY_SPAM_TRIGGER" || key == Keys::kKeySpamTrigger) {
         if (!value.empty())
           KeySpamTrigger = ParseKeyValue(value, KeySpamTrigger.load(std::memory_order_relaxed));
@@ -304,7 +403,7 @@ void LoadConfig() {
       }
       // Turbo Loot
       else if (key == Keys::kEnableTurboLoot)
-        EnableTurboLoot = (value == "true" || value == "1");
+        EnableTurboLoot = ParseBoolValue(value);
       else if (key == Keys::kTurboLootKey)
         TurboLootKey = ParseKeyValue(value, TurboLootKey.load(std::memory_order_relaxed));
       else if (key == Keys::kTurboLootDelay)
@@ -317,7 +416,7 @@ void LoadConfig() {
       }
       // Turbo Jump
       else if (key == Keys::kEnableTurboJump)
-        EnableTurboJump = (value == "true" || value == "1");
+        EnableTurboJump = ParseBoolValue(value);
       else if (key == Keys::kTurboJumpKey)
         TurboJumpKey = ParseKeyValue(value, TurboJumpKey.load(std::memory_order_relaxed));
       else if (key == Keys::kTurboJumpDelay)
@@ -334,7 +433,7 @@ void LoadConfig() {
       }
       // Superglide
       else if (key == Keys::kEnableSuperglide)
-        EnableSuperglide = (value == "true" || value == "1");
+        EnableSuperglide = ParseBoolValue(value);
       else if (key == Keys::kSuperglideBind)
         SuperglideBind = ParseKeyValue(value, SuperglideBind.load(std::memory_order_relaxed));
       else if (key == Keys::kTargetFps) {
@@ -349,7 +448,7 @@ void LoadConfig() {
       }
       // Jitter
       else if (key == Keys::kEnableJitter)
-        EnableJitter = (value == "true" || value == "1");
+        EnableJitter = ParseBoolValue(value);
       else if (key == Keys::kJitterMs) {
         int v = std::stoi(value);
         if (v >= 0)
@@ -375,6 +474,8 @@ void LoadConfig() {
   // Superglide mode is fixed to HOLD even if legacy config says otherwise.
   SuperglideMode.store(KeybindMode::Hold, std::memory_order_relaxed);
   SuperglideToggleActive.store(false, std::memory_order_relaxed);
+
+  ValidateConfig();
 
   std::string logMsg = "Configuration loaded:\n";
   logMsg += "  SPAM_DELAY_MS: " + std::to_string(SpamDelayMs.load()) + "\n";
@@ -410,6 +511,7 @@ void LoadConfig() {
 
 void SaveConfig() {
   std::lock_guard<std::mutex> ioLock(g_configIoMutex);
+  ValidateConfig();
 
   // Update-in-place: preserve unknown keys/comments, replace known keys, append
   // missing ones.

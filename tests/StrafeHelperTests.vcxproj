@@ -86,6 +86,7 @@
     <ClCompile Include="..\PrecisionTimer.cpp" />
     <ClCompile Include="test_superglide.cpp" />
     <ClCompile Include="test_utils.cpp" />
+    <ClCompile Include="test_config_validation.cpp" />
     <ClCompile Include="test_main.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

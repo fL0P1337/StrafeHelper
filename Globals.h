@@ -114,6 +114,8 @@ extern NOTIFYICONDATA g_nid;
 
 // Tray icon constants (constexpr replaces #define; macros ignore namespaces)
 inline constexpr UINT WM_TRAYICON           = WM_APP + 1;
+inline constexpr UINT WM_DEFERRED_CONFIG_SAVE = WM_APP + 2;
+inline constexpr UINT WM_BACKEND_FAILED        = WM_APP + 3;
 inline constexpr UINT ID_TRAY_APP_ICON      = 1001;
 inline constexpr UINT ID_TRAY_EXIT_MENU_ITEM    = 3000;
 inline constexpr UINT ID_TRAY_TOGGLE_SPAM_ITEM  = 3002;

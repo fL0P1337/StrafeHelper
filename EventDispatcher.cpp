@@ -19,7 +19,6 @@
 #include "Config.h"
 #include "Globals.h"
 #include "KeybindManager.h"
-#include "Logger.h"
 #include "MovementStateManager.h"
 #include "SpamLogic.h"
 #include "SuperglideLogic.h"
@@ -100,11 +99,9 @@ bool HandleFeatureKeyEvent(int vkCode, bool isKeyDown) noexcept {
     if (shouldBeActive &&
         !Globals::g_isSpamActive.load(std::memory_order_acquire)) {
       Globals::g_isSpamActive.store(true, std::memory_order_release);
-      Logger::GetInstance().Log("Spam Activated");
       OnSpamActivated(snapTapEnabled);
     } else if (!shouldBeActive &&
                Globals::g_isSpamActive.load(std::memory_order_acquire)) {
-      Logger::GetInstance().Log("Spam Deactivated");
       OnSpamDeactivated(snapTapEnabled);
     }
     // Spam trigger key itself is never forwarded to the game.

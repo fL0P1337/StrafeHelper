@@ -95,7 +95,7 @@ Kernel-mode filter driver via [Interception](https://github.com/oblitum/Intercep
 
 - **Language:** C++20 (MSVC v143)
 - **GUI:** Dear ImGui · Win32 + DirectX 11 backend · Inter font
-- **Threading:** One Win32 thread + auto-reset event per feature; atomic config shared across threads
+- **Threading:** One `std::jthread` + condition variable per feature; atomic config shared across threads
 - **Timing:** `QueryPerformanceFrequency` / `QueryPerformanceCounter` for frame-accurate sleep; `timeBeginPeriod(1)` for coarse sleep resolution
 - **Injection:** `SendInput` with `KEYEVENTF_SCANCODE`; synthetic events tagged with `NEO_SYNTHETIC_INFORMATION` to avoid re-entrant processing
 
@@ -103,13 +103,13 @@ Kernel-mode filter driver via [Interception](https://github.com/oblitum/Intercep
 
 ```
 InputBackend (abstract)
-├── KbdHookBackend   — WH_KEYBOARD_LL hook thread → event queue → PollEvents
-└── InterceptionBackend — Interception driver polling thread → event queue → PollEvents
+├── KbdHookBackend      — WH_KEYBOARD_LL hook thread → synchronous dispatch
+└── InterceptionBackend — driver polling thread → synchronous dispatch/pass-through
 
 Application
-├── DispatchKeyEvent  — routes Interception events to feature handlers
-├── KeyboardProc      — routes WinHook events to feature handlers
-└── Feature threads (Win32 HANDLE + Event)
+├── DispatchKeyEvent — backend-neutral key routing
+├── SwitchBackend    — joined runtime backend replacement + state reconciliation
+└── Feature workers (`std::jthread` + condition variable)
     ├── SpamLogic
     ├── TurboLogic (Loot + Jump)
     └── SuperglideLogic

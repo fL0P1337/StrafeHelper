@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include "InterceptionBackend.h"
+#include "Globals.h"
 #include "Logger.h"
 #include "Utils.h"
 
@@ -62,7 +63,8 @@ bool InterceptionBackend::Initialize() noexcept {
   eventsDropped_.store(0, std::memory_order_relaxed);
   eventsInjected_.store(0, std::memory_order_relaxed);
 
-  running_.store(true, std::memory_order_relaxed);
+  healthy_.store(true, std::memory_order_release);
+  running_.store(true, std::memory_order_release);
   thread_ = std::thread([this]() { ThreadMain(); });
 
   initialized_ = true;
@@ -74,12 +76,11 @@ bool InterceptionBackend::Initialize() noexcept {
 }
 
 void InterceptionBackend::Shutdown() noexcept {
-  if (running_.load(std::memory_order_relaxed)) {
-    running_.store(false, std::memory_order_relaxed);
-    if (thread_.joinable()) {
-      thread_.join();
-    }
+  running_.store(false, std::memory_order_release);
+  if (thread_.joinable()) {
+    thread_.join();
   }
+  healthy_.store(false, std::memory_order_release);
 
   initialized_ = false;
   lastKeyboardDevice_ = 0;
@@ -150,7 +151,9 @@ bool InterceptionBackend::InjectKey(uint16_t scanCode,
 }
 
 bool InterceptionBackend::GetStatus(BackendStatus &out) noexcept {
-  out.driverActive = context_ != nullptr;
+  out.driverActive = initialized_ &&
+                     running_.load(std::memory_order_acquire) &&
+                     healthy_.load(std::memory_order_acquire);
   out.eventsCaptured = eventsCaptured_.load(std::memory_order_relaxed);
   out.eventsDropped = eventsDropped_.load(std::memory_order_relaxed);
   out.eventsInjected = eventsInjected_.load(std::memory_order_relaxed);
@@ -174,9 +177,11 @@ void InterceptionBackend::ThreadMain() noexcept {
 
     const int received = interceptionReceive_(context_, device, strokes.data(), kStrokeBatch);
     if (received <= 0) {
-      continue;
+      MarkUnhealthy();
+      break;
     }
 
+    bool sendFailed = false;
     for (int i = 0; i < received; ++i) {
       const auto *keyStroke = reinterpret_cast<const InterceptionKeyStroke *>(&strokes[static_cast<size_t>(i)]);
 
@@ -210,9 +215,32 @@ void InterceptionBackend::ThreadMain() noexcept {
       if (suppress) {
         eventsDropped_.fetch_add(1, std::memory_order_relaxed);
       } else {
-        (void)SendOnDevice(device, *keyStroke, false);
+        if (!SendOnDevice(device, *keyStroke, false)) {
+          sendFailed = true;
+          break;
+        }
       }
     }
+
+    if (sendFailed) {
+      MarkUnhealthy();
+      break;
+    }
+  }
+}
+
+void InterceptionBackend::MarkUnhealthy() noexcept {
+  if (!healthy_.exchange(false, std::memory_order_acq_rel)) {
+    return;
+  }
+  running_.store(false, std::memory_order_release);
+  if (context_ && interceptionSetFilter_ && interceptionIsKeyboard_) {
+    interceptionSetFilter_(
+        context_, interceptionIsKeyboard_,
+        static_cast<InterceptionFilter>(INTERCEPTION_FILTER_KEY_NONE));
+  }
+  if (Globals::g_hWindow) {
+    PostMessageW(Globals::g_hWindow, Globals::WM_BACKEND_FAILED, 0, 0);
   }
 }
 

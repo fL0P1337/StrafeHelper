@@ -75,6 +75,7 @@ extern std::atomic<int> JitterMs; // max +/- offset applied to each delay cycle
 extern std::atomic<int> DebounceUs;
 
 // Function to load configuration
+void ValidateConfig();
 void LoadConfig();
 void SaveConfig();
 

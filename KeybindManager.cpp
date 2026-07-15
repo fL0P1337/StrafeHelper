@@ -18,6 +18,7 @@ namespace KeybindManager {
 // misses for the same observable behaviour. Single dispatch thread today,
 // but atomics keep us safe if that changes.
 static std::array<std::atomic<bool>, 256> g_previousKeyState{};
+static std::atomic<int> g_pendingBindReleaseVk{0};
 
 void Initialize() {
   for (auto &v : g_previousKeyState) {
@@ -179,45 +180,58 @@ bool IsSuperglideActive() {
 // -----------------------------------------------------------------------
 
 bool HandleBind(int vkCode, bool isKeyDown) {
+  const int pendingRelease =
+      g_pendingBindReleaseVk.load(std::memory_order_acquire);
+  if (!isKeyDown && pendingRelease == vkCode) {
+    g_pendingBindReleaseVk.store(0, std::memory_order_release);
+    return true;
+  }
+
   std::atomic<int> *target = Globals::g_bindingTarget.load();
   if (!target) {
     return false;
   }
 
-  // Suppress key-up events for the binding key to prevent leaks,
-  // but don't perform binding logic on them.
   if (!isKeyDown) {
     return true;
   }
 
-  // Cancel on Escape
   if (vkCode == VK_ESCAPE) {
     Globals::g_bindingTarget.store(nullptr);
-    Logger::GetInstance().Log("Binding cancelled by user.");
     return true;
   }
 
-  // Ignore mouse buttons (hooks usually filter them, but defensive check)
-  if (vkCode == VK_LBUTTON || vkCode == VK_RBUTTON || vkCode == VK_MBUTTON) {
+  if (vkCode == VK_LBUTTON || vkCode == VK_RBUTTON || vkCode == VK_MBUTTON ||
+      vkCode == VK_LWIN || vkCode == VK_RWIN || vkCode <= 0 || vkCode >= 256) {
+    Globals::g_bindingTarget.store(nullptr);
     return true;
   }
 
-  // Bind the key
-  target->store(vkCode);
-  if (vkCode >= 0 && vkCode < 256) {
-    Globals::g_KeyInfo[vkCode].physicalKeyDown.store(true,
-                                                     std::memory_order_release);
-    g_previousKeyState[static_cast<size_t>(vkCode)].store(
-        true, std::memory_order_relaxed);
+  const std::atomic<int> *bindings[] = {
+      &Config::KeySpamTrigger,
+      &Config::TurboLootKey,
+      &Config::TurboJumpKey,
+      &Config::SuperglideBind,
+  };
+  for (const auto *binding : bindings) {
+    if (binding != target &&
+        binding->load(std::memory_order_relaxed) == vkCode) {
+      return true;
+    }
   }
-  Config::SaveConfig();
 
-  Logger::GetInstance().Log("Rebound key to VK " + std::to_string(vkCode));
-
-  // Exit binding mode
+  target->store(vkCode, std::memory_order_relaxed);
+  Globals::g_KeyInfo[vkCode].physicalKeyDown.store(true,
+                                                    std::memory_order_release);
+  g_previousKeyState[static_cast<size_t>(vkCode)].store(
+      true, std::memory_order_relaxed);
+  g_pendingBindReleaseVk.store(vkCode, std::memory_order_release);
   Globals::g_bindingTarget.store(nullptr);
 
-  return true; // Suppress the key press so it doesn't trigger game actions
+  if (Globals::g_hWindow) {
+    PostMessageW(Globals::g_hWindow, Globals::WM_DEFERRED_CONFIG_SAVE, 0, 0);
+  }
+  return true;
 }
 
 } // namespace KeybindManager

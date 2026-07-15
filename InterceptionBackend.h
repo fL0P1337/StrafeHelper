@@ -60,6 +60,7 @@ private:
                                   const InterceptionKeyStroke &stroke,
                                   bool countInjected) noexcept;
   void ThreadMain() noexcept;
+  void MarkUnhealthy() noexcept;
 
 private:
   HMODULE interceptionLib_ = nullptr;
@@ -82,6 +83,7 @@ private:
   
   std::thread thread_;
   std::atomic<bool> running_{false};
+  std::atomic<bool> healthy_{false};
   EventCallback callback_ = nullptr;
 
   // Atomic counters so neither the polling thread nor InjectKey ever takes

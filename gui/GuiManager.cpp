@@ -7,6 +7,7 @@
 #include "../KeybindManager.h"
 #include "../Logger.h"
 #include "../MovementStateManager.h"
+#include "../SuperglideLogic.h"
 #include "../TurboLogic.h"
 #include "../catrine/byte.h"
 #include "../catrine/elements.h"
@@ -16,7 +17,9 @@
 #include "../imgui/imgui_internal.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
+#include <limits>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd,
                                                              UINT msg,
@@ -256,16 +259,18 @@ void GuiManager::RenderConfigContent() {
   // Returns the label of another feature using the same VK, or nullptr.
   auto FindKeybindConflict = [](int vk,
                                 const std::atomic<int> &self) -> const char * {
+    if (vk == 0) {
+      return nullptr;
+    }
     struct BindEntry {
       const std::atomic<int> *key;
-      const std::atomic<bool> *enabled;
       const char *name;
     };
     const BindEntry binds[] = {
-        {&Config::KeySpamTrigger, &Config::EnableSpam, "Lurch Trigger"},
-        {&Config::TurboLootKey, &Config::EnableTurboLoot, "Turbo Loot"},
-        {&Config::TurboJumpKey, &Config::EnableTurboJump, "Turbo Jump"},
-        {&Config::SuperglideBind, &Config::EnableSuperglide, "Superglide"},
+        {&Config::KeySpamTrigger, "Lurch Trigger"},
+        {&Config::TurboLootKey, "Turbo Loot"},
+        {&Config::TurboJumpKey, "Turbo Jump"},
+        {&Config::SuperglideBind, "Superglide"},
     };
     for (const auto &b : binds) {
       if (b.key == &self)
@@ -278,20 +283,36 @@ void GuiManager::RenderConfigContent() {
 
   // Helper: generic key rebind button with conflict warning
   auto RebindButton = [&](const char *label, std::atomic<int> &target) {
-    bool isListening = (Globals::g_bindingTarget.load() == &target);
+    ImGui::PushID(&target);
+    const bool isListening = (Globals::g_bindingTarget.load() == &target);
 
     if (isListening) {
-      // Visual feedback for listening mode
       ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.75f, 0.10f, 1.0f));
       ImGui::Text("Press any key...");
       ImGui::PopStyleColor();
       ImGui::SameLine();
       ImGui::TextDisabled("%s", label);
     } else {
-      char keyName[64] = "Unknown Key";
-      VkToName(target.load(), keyName, sizeof(keyName));
+      const int current = target.load(std::memory_order_relaxed);
+      char keyName[64] = "Unbound";
+      if (current != 0) {
+        VkToName(current, keyName, sizeof(keyName));
+      }
       if (ImGui::Button(keyName, ImVec2(0, 0))) {
         Globals::g_bindingTarget.store(&target);
+      }
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Clear")) {
+        target.store(0, std::memory_order_relaxed);
+        if (&target == &Config::KeySpamTrigger)
+          Config::EnableSpam.store(false, std::memory_order_relaxed);
+        else if (&target == &Config::TurboLootKey)
+          Config::EnableTurboLoot.store(false, std::memory_order_relaxed);
+        else if (&target == &Config::TurboJumpKey)
+          Config::EnableTurboJump.store(false, std::memory_order_relaxed);
+        else if (&target == &Config::SuperglideBind)
+          Config::EnableSuperglide.store(false, std::memory_order_relaxed);
+        Config::SaveConfig();
       }
       ImGui::SameLine();
       ImGui::TextDisabled("%s", label);
@@ -307,6 +328,7 @@ void GuiManager::RenderConfigContent() {
                conflictKeyName, conflict);
       ImGui::TextColored(ImVec4(0.95f, 0.40f, 0.30f, 1.0f), "%s", warnBuf);
     }
+    ImGui::PopID();
   };
 
   // Shared child layout for all feature blocks:
@@ -344,6 +366,7 @@ void GuiManager::RenderConfigContent() {
 
   ImGui::TextDisabled("Features");
   ImGui::Separator();
+  ImGui::TextDisabled("Duplicate and Windows keys are rejected while rebinding.");
 
   bool useSpam = Config::EnableSpam.load();
   if (ImGui::Checkbox("Lurch Strafing", &useSpam)) {
@@ -476,6 +499,9 @@ void GuiManager::RenderConfigContent() {
       Config::SaveConfig();
     }
     ImGui::PopStyleVar();
+    ImGui::TextWrapped(
+        "Target FPS must match the Apex FPS cap. Unstable game FPS reduces "
+        "timing accuracy.");
     EndFeatureChildren();
   }
 
@@ -659,14 +685,20 @@ void GuiManager::RenderConsoleContent() {
   }
   ImGui::Separator();
 
-  auto logs = Logger::GetInstance().GetRecentLogs();
-  std::string fullLog;
-  for (const auto &log : logs) {
-    fullLog += log + "\n";
+  static uint64_t cachedGeneration = std::numeric_limits<uint64_t>::max();
+  static std::string fullLog;
+  const uint64_t generation = Logger::GetInstance().GetGeneration();
+  if (generation != cachedGeneration) {
+    cachedGeneration = generation;
+    fullLog.clear();
+    const auto logs = Logger::GetInstance().GetRecentLogs();
+    for (const auto &log : logs) {
+      fullLog += log + "\n";
+    }
   }
 
   ImVec2 avail = ImGui::GetContentRegionAvail();
-  ImGui::InputTextMultiline("##ConsoleOut", (char *)fullLog.c_str(),
+  ImGui::InputTextMultiline("##ConsoleOut", fullLog.data(),
                             fullLog.size() + 1, avail,
                             ImGuiInputTextFlags_ReadOnly);
 
@@ -716,6 +748,9 @@ void GuiManager::RenderStateContent() {
     ImGui::SameLine();
     ImGui::TextColored(hookOk ? colOn : ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "%s",
                        backend == 0 ? "WinHook" : "Interception");
+    ImGui::TextDisabled("Captured: %ld  Suppressed: %ld  Injected: %ld",
+                        status.eventsCaptured, status.eventsDropped,
+                        status.eventsInjected);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
       ImGui::SetTooltip("The active input capture backend.\n"
                         "WinHook uses a low-level keyboard hook.\n"
@@ -820,9 +855,22 @@ void GuiManager::RenderStateContent() {
   {
     const bool enabled =
         Config::EnableSuperglide.load(std::memory_order_relaxed);
-    StatusDot(enabled ? FeatureStatus::Idle : FeatureStatus::Off);
+    const auto state = GetSuperglideExecutionState();
+    const bool active = enabled && state != SuperglideExecutionState::Idle;
+    StatusDot(active ? FeatureStatus::Active
+                     : (enabled ? FeatureStatus::Idle : FeatureStatus::Off));
     ImGui::SameLine();
     ImGui::TextColored(enabled ? colLabel : colOff, "Superglide");
+    if (enabled && state == SuperglideExecutionState::Executing) {
+      ImGui::Indent(16.0f);
+      ImGui::TextColored(colActive, "Executing input sequence...");
+      ImGui::Unindent(16.0f);
+    } else if (enabled && state == SuperglideExecutionState::Cooldown) {
+      ImGui::Indent(16.0f);
+      ImGui::TextColored(colActive, "Cooldown: %lums",
+                         GetSuperglideCooldownRemainingMs());
+      ImGui::Unindent(16.0f);
+    }
   }
 
   // Jitter
@@ -904,7 +952,7 @@ void GuiManager::RenderStateContent() {
                              : (lastChance >= 50.0)
                                  ? ImVec4(0.95f, 0.85f, 0.20f, 1.0f)
                                  : ImVec4(0.95f, 0.40f, 0.30f, 1.0f);
-    ImGui::TextColored(chanceCol, "%.1f%% chance", lastChance);
+    ImGui::TextColored(chanceCol, "%.1f%% timing score", lastChance);
     ImGui::SameLine();
     ImGui::TextColored(colLabel, "(%.3f frames, %+.2fms error)", lastFrames,
                        lastErrorMs);
@@ -928,7 +976,7 @@ void GuiManager::RenderStateContent() {
             "Closer to 0 is better.");
 
     ImGui::Spacing();
-    ImGui::TextDisabled("Success History");
+    ImGui::TextDisabled("Timing Score History");
     ImGui::PushStyleColor(ImGuiCol_PlotHistogram,
                           ImVec4(0.35f, 0.75f, 0.35f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.12f, 0.14f, 0.20f, 1.0f));

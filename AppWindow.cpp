@@ -42,6 +42,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     return DefWindowProc(hwnd, msg, wParam, lParam);
   }
 
+  case Globals::WM_DEFERRED_CONFIG_SAVE:
+    Config::SaveConfig();
+    return 0;
+
+  case Globals::WM_BACKEND_FAILED:
+    Logger::GetInstance().Log(
+        "Interception backend became unhealthy; falling back to WinHook.");
+    (void)SwitchBackend(Config::InputBackendKind::KbdHook);
+    return 0;
   case WM_CLOSE:
     // Hidden message window closing — just destroy, do NOT post quit.
     // The GUI window owns the WM_QUIT lifecycle.

@@ -16,6 +16,7 @@
 #include "Application.h"
 #include "Logger.h"
 #include "Utils.h"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -36,11 +37,16 @@ std::jthread g_superglideThread;
 std::mutex g_superglideCvMtx;
 std::condition_variable g_superglideCv;
 bool g_superglideCvFlag = false;
+std::atomic<SuperglideExecutionState> g_executionState{
+    SuperglideExecutionState::Idle};
+std::atomic<ULONGLONG> g_cooldownEndTick{0};
 
 // Injects a single key tap (down then up).
-static void InjectKeyTap(int vk) noexcept {
-  InjectKey(vk, true);
-  InjectKey(vk, false);
+static bool InjectKeyTap(int vk) noexcept {
+  if (!InjectKey(vk, true)) {
+    return false;
+  }
+  return InjectKey(vk, false);
 }
 
 // Generic stop helper shared with TurboLogic pattern.
@@ -78,9 +84,16 @@ void SuperglideThreadFunc(std::stop_token stopToken) {
     const double targetFPS = Config::TargetFPS.load(std::memory_order_relaxed);
     const double frameTimeMs = 1000.0 / targetFPS;
 
+    g_executionState.store(SuperglideExecutionState::Executing,
+                           std::memory_order_release);
+
     // 1. Jump tap — record timing immediately after injection so the
     //    measurement baseline matches the practice tool.
-    InjectKeyTap(kJumpVK);
+    if (!InjectKeyTap(kJumpVK)) {
+      g_executionState.store(SuperglideExecutionState::Idle,
+                             std::memory_order_release);
+      continue;
+    }
 
     const LONGLONG start = PrecisionTimer::GetCurrentTicks();
     const LONGLONG targetTick = start + timer.MsToTicks(frameTimeMs);
@@ -91,10 +104,13 @@ void SuperglideThreadFunc(std::stop_token stopToken) {
       break;
     }
 
-    const LONGLONG now = PrecisionTimer::GetCurrentTicks();
-
     // 3. Crouch tap — fires at exactly 1 frame after Jump.
-    InjectKeyTap(kCrouchVK);
+    if (!InjectKeyTap(kCrouchVK)) {
+      g_executionState.store(SuperglideExecutionState::Idle,
+                             std::memory_order_release);
+      continue;
+    }
+    const LONGLONG now = PrecisionTimer::GetCurrentTicks();
 
     // Record timing stats using the same formula as the practice tool:
     //   elapsedFrames = elapsed_seconds / frameTime
@@ -125,14 +141,24 @@ void SuperglideThreadFunc(std::stop_token stopToken) {
     }
 
     // Cooldown/delay to prevent double-activation
+    g_executionState.store(SuperglideExecutionState::Cooldown,
+                           std::memory_order_release);
+    g_cooldownEndTick.store(GetTickCount64() + 500,
+                            std::memory_order_release);
     {
       std::unique_lock<std::mutex> cvLock(g_superglideCvMtx);
       g_superglideCv.wait_for(cvLock, std::chrono::milliseconds(500), [&stopToken]() {
         return stopToken.stop_requested();
       });
     }
+    g_cooldownEndTick.store(0, std::memory_order_release);
+    g_executionState.store(SuperglideExecutionState::Idle,
+                           std::memory_order_release);
   }
 
+  g_cooldownEndTick.store(0, std::memory_order_release);
+  g_executionState.store(SuperglideExecutionState::Idle,
+                         std::memory_order_release);
   timeEndPeriod(1);
   Logger::GetInstance().Log("Superglide thread exiting.");
 }
@@ -153,9 +179,28 @@ void StopSuperglideThread() {
 }
 
 void TriggerSuperglide() noexcept {
+  if (g_executionState.load(std::memory_order_acquire) !=
+      SuperglideExecutionState::Idle) {
+    g_superglideCv.notify_all();
+    return;
+  }
   {
     std::lock_guard<std::mutex> lock(g_superglideCvMtx);
     g_superglideCvFlag = true;
   }
   g_superglideCv.notify_all();
+}
+
+SuperglideExecutionState GetSuperglideExecutionState() noexcept {
+  return g_executionState.load(std::memory_order_acquire);
+}
+
+unsigned long GetSuperglideCooldownRemainingMs() noexcept {
+  const ULONGLONG end = g_cooldownEndTick.load(std::memory_order_acquire);
+  const ULONGLONG now = GetTickCount64();
+  if (end <= now) {
+    return 0;
+  }
+  const ULONGLONG remaining = end - now;
+  return static_cast<unsigned long>(std::min<ULONGLONG>(remaining, 500));
 }

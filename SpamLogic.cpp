@@ -6,8 +6,6 @@
 #include "Application.h"
 #include "Logger.h"
 #include "Utils.h"
-#include <algorithm>
-#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -171,60 +169,8 @@ void SpamThreadFunc(std::stop_token stopToken) {
 }
 } // namespace
 
-namespace {
-// Per-VK cached scan code + flag template, populated lazily on first use.
-// The hot path (spam loop, hammered every few ms) no longer pays the cost
-// of MapVirtualKeyW(VSC_TO_VK_EX) on every cycle.
-struct WasdScanEntry {
-  WORD scanCode;
-  DWORD baseFlags;     // KEYEVENTF_SCANCODE (+ EXTENDEDKEY for extended keys)
-  std::atomic<bool> ready{false};
-};
-
-std::array<WasdScanEntry, 256> g_scanCache{};
-
-void EnsureScanCacheEntry(int vk) {
-  if (vk < 0 || vk >= 256) return;
-  auto &entry = g_scanCache[static_cast<size_t>(vk)];
-  if (entry.ready.load(std::memory_order_acquire)) return;
-
-  entry.scanCode = VirtualKeyToScanCode(vk);
-  entry.baseFlags = KEYEVENTF_SCANCODE;
-  // Mirror VirtualKeyInputFlags' extended-key detection without re-calling
-  // MapVirtualKeyW per event.
-  const UINT extendedScan =
-      MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC_EX);
-  if ((extendedScan & 0xE000u) == 0xE000u) {
-    entry.baseFlags |= KEYEVENTF_EXTENDEDKEY;
-  }
-  entry.ready.store(true, std::memory_order_release);
-}
-} // namespace
-
 void SendKeyInputBatch(const int *keys, size_t count, bool keyDown) {
-  if (count == 0)
-    return;
-
-  // Bounded to ≤4 (WASD); stack-allocate to avoid heap churn per cycle.
-  std::array<INPUT, 4> inputs{};
-  const size_t n = (count <= inputs.size()) ? count : inputs.size();
-  for (size_t i = 0; i < n; ++i) {
-    const int vk = keys[i];
-    EnsureScanCacheEntry(vk);
-    const auto &entry = g_scanCache[static_cast<size_t>(vk)];
-
-    inputs[i].type = INPUT_KEYBOARD;
-    inputs[i].ki.wVk = 0;
-    inputs[i].ki.wScan = entry.scanCode;
-    DWORD flags = entry.baseFlags;
-    if (!keyDown) {
-      flags |= KEYEVENTF_KEYUP;
-    }
-    inputs[i].ki.dwFlags = flags;
-    inputs[i].ki.time = 0;
-    inputs[i].ki.dwExtraInfo = NEO_SYNTHETIC_INFORMATION;
-  }
-  SendInput(static_cast<UINT>(n), inputs.data(), sizeof(INPUT));
+  (void)InjectKeys(keys, count, keyDown);
 }
 
 void CleanupSpamState(bool restoreHeldKeys) {

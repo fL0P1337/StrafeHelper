@@ -15,3 +15,8 @@ bool HandleMovementKeyState(int vkCode, bool isKeyDown,
 
 // Called when runtime configuration changes require output state to be re-applied.
 void RefreshMovementState();
+// Releases virtual movement output before an input backend is detached.
+void PrepareMovementStateForBackendSwitch();
+
+// Rebuilds cached physical/axis state after the replacement backend is active.
+void ReconcileMovementStateAfterBackendSwitch();

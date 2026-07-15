@@ -1,6 +1,8 @@
 // Logger.h
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -21,6 +23,7 @@ public:
   void Log(const std::string &message);
   std::vector<std::string> GetRecentLogs(size_t maxCount = 0);
   void Clear();
+  [[nodiscard]] uint64_t GetGeneration() const noexcept;
 
 private:
   Logger() = default;
@@ -28,5 +31,6 @@ private:
 
   std::mutex m_mutex;
   std::deque<std::string> m_logs;
+  std::atomic<uint64_t> m_generation{0};
   const size_t MAX_LINES = 1000;
 };
