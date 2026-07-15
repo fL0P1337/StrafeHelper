@@ -6,6 +6,7 @@
 #include "Utils.h"
 #include <cctype>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -13,6 +14,8 @@
 
 namespace Config {
 namespace {
+std::mutex g_configIoMutex;
+
 std::string TrimCopy(const std::string& value) {
   const size_t first = value.find_first_not_of(" \t\n\r\f\v");
   if (first == std::string::npos) {
@@ -169,9 +172,10 @@ static std::string GetConfigFilePath() {
   if (needed <= 0) {
     return CONFIG_FILE_NAME;
   }
-  std::string narrowDir(static_cast<size_t>(needed - 1), '\0');
-  WideCharToMultiByte(CP_ACP, 0, dir.c_str(), -1,
-                      &narrowDir[0], needed, nullptr, nullptr);
+  std::string narrowDir(static_cast<size_t>(needed), '\0');
+  WideCharToMultiByte(CP_ACP, 0, dir.c_str(), -1, narrowDir.data(), needed,
+                      nullptr, nullptr);
+  narrowDir.pop_back();
   return narrowDir + CONFIG_FILE_NAME;
 #else
   // Non-Windows fallback: use CWD
@@ -224,6 +228,7 @@ std::atomic<int> DebounceUs{500};
 
 // --- Implementation of LoadConfig ---
 void LoadConfig() {
+  std::lock_guard<std::mutex> ioLock(g_configIoMutex);
   const std::string configPath = GetConfigFilePath();
   std::ifstream configFile(configPath);
   if (!configFile.is_open()) {
@@ -404,6 +409,8 @@ void LoadConfig() {
 }
 
 void SaveConfig() {
+  std::lock_guard<std::mutex> ioLock(g_configIoMutex);
+
   // Update-in-place: preserve unknown keys/comments, replace known keys, append
   // missing ones.
   const std::string configPath = GetConfigFilePath();
@@ -515,10 +522,11 @@ void SaveConfig() {
     }
   }
 
-  std::ofstream out(configPath, std::ios::trunc);
+  const std::string tempPath = configPath + ".tmp";
+  std::ofstream out(tempPath, std::ios::trunc);
   if (!out.is_open()) {
     Logger::GetInstance().Log("Warning: Failed to open config file '" +
-                              configPath + "' for writing.");
+                              tempPath + "' for writing.");
     return;
   }
 
@@ -528,6 +536,20 @@ void SaveConfig() {
       out << std::endl;
   }
   out.close();
+  if (!out) {
+    DeleteFileA(tempPath.c_str());
+    Logger::GetInstance().Log("Warning: Failed to write config file '" +
+                              tempPath + "'.");
+    return;
+  }
+
+  if (!MoveFileExA(tempPath.c_str(), configPath.c_str(),
+                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    DeleteFileA(tempPath.c_str());
+    Logger::GetInstance().Log("Warning: Failed to replace config file '" +
+                              configPath + "'.");
+    return;
+  }
 
   Logger::GetInstance().Log("Configuration saved to " + configPath);
 }

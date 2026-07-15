@@ -12,7 +12,7 @@ void HandleSideMouseButton(int vkCode, bool isDown);
 
 // Runtime backend switching (callable from GUI thread).
 // Stops the current backend / hook thread and starts the requested backend.
-void SwitchBackend(Config::InputBackendKind kind);
+bool SwitchBackend(Config::InputBackendKind kind);
 
 bool DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept;
 bool GetActiveBackendStatus(BackendStatus &out) noexcept;

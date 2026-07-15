@@ -6,6 +6,8 @@
 #include "../Globals.h"
 #include "../KeybindManager.h"
 #include "../Logger.h"
+#include "../MovementStateManager.h"
+#include "../TurboLogic.h"
 #include "../catrine/byte.h"
 #include "../catrine/elements.h"
 #include "../imgui/backends/imgui_impl_dx11.h"
@@ -240,6 +242,9 @@ void GuiManager::RenderConfigContent() {
     if (ImGui::SliderInt("##" label, &(var), vmin, vmax, "")) {                \
       saveFn;                                                                  \
     }                                                                          \
+    if (ImGui::IsItemDeactivatedAfterEdit()) {                                 \
+      Config::SaveConfig();                                                    \
+    }                                                                          \
     ImGui::PopStyleVar();                                                      \
   } while (false)
 
@@ -343,6 +348,11 @@ void GuiManager::RenderConfigContent() {
   bool useSpam = Config::EnableSpam.load();
   if (ImGui::Checkbox("Lurch Strafing", &useSpam)) {
     Config::EnableSpam.store(useSpam);
+    if (!useSpam) {
+      Config::KeySpamTriggerToggleActive.store(false,
+                                                std::memory_order_relaxed);
+      OnSpamDeactivated(Config::EnableSnapTap.load(std::memory_order_relaxed));
+    }
     Config::SaveConfig();
   }
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
@@ -354,18 +364,19 @@ void GuiManager::RenderConfigContent() {
 
     int delay = Config::SpamDelayMs.load();
     FULL_SLIDER_INT("Spam Delay", delay, 1, 100, "%dms",
-                    (Config::SpamDelayMs.store(delay), Config::SaveConfig()));
+                    Config::SpamDelayMs.store(delay));
 
     int duration = Config::SpamKeyDownDurationMs.load();
     FULL_SLIDER_INT(
         "Hold Duration", duration, 0, 50, "%dms",
-        (Config::SpamKeyDownDurationMs.store(duration), Config::SaveConfig()));
+        Config::SpamKeyDownDurationMs.store(duration));
     EndFeatureChildren();
   }
 
   bool useSnapTap = Config::EnableSnapTap.load();
   if (ImGui::Checkbox("SnapTap (SOCD)", &useSnapTap)) {
     Config::EnableSnapTap.store(useSnapTap);
+    OnSnapTapToggled(useSnapTap);
     Config::SaveConfig();
   }
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
@@ -379,6 +390,10 @@ void GuiManager::RenderConfigContent() {
   bool useTurboLoot = Config::EnableTurboLoot.load();
   if (ImGui::Checkbox("Turbo Loot", &useTurboLoot)) {
     Config::EnableTurboLoot.store(useTurboLoot);
+    if (!useTurboLoot) {
+      Config::TurboLootToggleActive.store(false, std::memory_order_relaxed);
+    }
+    TriggerTurboLoot();
     Config::SaveConfig();
   }
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
@@ -391,18 +406,21 @@ void GuiManager::RenderConfigContent() {
     int lootDelay = Config::TurboLootDelayMs.load();
     FULL_SLIDER_INT(
         "Loot Spam Delay", lootDelay, 1, 100, "%dms",
-        (Config::TurboLootDelayMs.store(lootDelay), Config::SaveConfig()));
+        Config::TurboLootDelayMs.store(lootDelay));
 
     int lootDuration = Config::TurboLootDurationMs.load();
     FULL_SLIDER_INT("Loot Hold Duration", lootDuration, 0, 50, "%dms",
-                    (Config::TurboLootDurationMs.store(lootDuration),
-                     Config::SaveConfig()));
+                    Config::TurboLootDurationMs.store(lootDuration));
     EndFeatureChildren();
   }
 
   bool useTurboJump = Config::EnableTurboJump.load();
   if (ImGui::Checkbox("Turbo Jump", &useTurboJump)) {
     Config::EnableTurboJump.store(useTurboJump);
+    if (!useTurboJump) {
+      Config::TurboJumpToggleActive.store(false, std::memory_order_relaxed);
+    }
+    TriggerTurboJump();
     Config::SaveConfig();
   }
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
@@ -415,12 +433,11 @@ void GuiManager::RenderConfigContent() {
     int jumpDelay = Config::TurboJumpDelayMs.load();
     FULL_SLIDER_INT(
         "Jump Spam Delay", jumpDelay, 1, 100, "%dms",
-        (Config::TurboJumpDelayMs.store(jumpDelay), Config::SaveConfig()));
+        Config::TurboJumpDelayMs.store(jumpDelay));
 
     int jumpDuration = Config::TurboJumpDurationMs.load();
     FULL_SLIDER_INT("Jump Hold Duration", jumpDuration, 0, 50, "%dms",
-                    (Config::TurboJumpDurationMs.store(jumpDuration),
-                     Config::SaveConfig()));
+                    Config::TurboJumpDurationMs.store(jumpDuration));
     EndFeatureChildren();
   }
 
@@ -454,6 +471,8 @@ void GuiManager::RenderConfigContent() {
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::SliderFloat("##SuperglideFPS", &fps, 30.0f, 300.0f, "")) {
       Config::TargetFPS.store(static_cast<double>(fps));
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
       Config::SaveConfig();
     }
     ImGui::PopStyleVar();
@@ -485,18 +504,24 @@ void GuiManager::RenderConfigContent() {
       std::wstring dllPath = exeDir + L"interception.dll";
       std::wstring dll64Path = exeDir + L"interception64.dll";
 
-      const bool dllPresent =
-          (GetFileAttributesW(dllPath.c_str()) != INVALID_FILE_ATTRIBUTES) ||
-          (GetFileAttributesW(dll64Path.c_str()) != INVALID_FILE_ATTRIBUTES);
+      std::wstring availableDllPath;
+      if (GetFileAttributesW(dllPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        availableDllPath = dllPath;
+      } else if (GetFileAttributesW(dll64Path.c_str()) !=
+                 INVALID_FILE_ATTRIBUTES) {
+        availableDllPath = dll64Path;
+      }
 
-      if (!dllPresent) {
+      if (availableDllPath.empty()) {
         s_icStatus.state = InterceptionStatus::State::DllMissing;
       } else {
         // 2. Try to create a driver context — confirms the kernel filter is
         //    active. We LoadLibrary temporarily; drivers loaded in both the
         //    target app and here share the same user-mode proxy so this is
         //    safe.
-        HMODULE lib = LoadLibraryExW(dllPath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        HMODULE lib = LoadLibraryExW(availableDllPath.c_str(), nullptr,
+                                     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+                                         LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
         if (!lib) {
           s_icStatus.state = InterceptionStatus::State::DriverInactive;
         } else {
@@ -570,7 +595,6 @@ void GuiManager::RenderConfigContent() {
       ImGui::EndDisabled();
 
     if (changed) {
-      Config::SelectedBackend.store(backend);
       SwitchBackend(static_cast<Config::InputBackendKind>(backend));
     }
 
@@ -617,6 +641,8 @@ void GuiManager::RenderConsoleContent() {
       ImGui::SetNextItemWidth(-FLT_MIN);
       if (ImGui::SliderInt("##JitterMs", &jitterVal, 1, 20, "")) {
         Config::JitterMs.store(jitterVal, std::memory_order_relaxed);
+      }
+      if (ImGui::IsItemDeactivatedAfterEdit()) {
         Config::SaveConfig();
       }
       ImGui::PopStyleVar();
@@ -819,8 +845,17 @@ void GuiManager::RenderStateContent() {
   ImGui::TextDisabled("Superglide Timing");
   ImGui::Separator();
 
-  const auto &stats = Globals::g_superglideStats;
-  const int totalCount = stats.count.load(std::memory_order_relaxed);
+  auto &stats = Globals::g_superglideStats;
+  int totalCount = 0;
+  int writeIdx = 0;
+  Globals::SuperglideResult history[Globals::kSuperglideHistorySize]{};
+  {
+    std::lock_guard<std::mutex> lock(stats.mutex);
+    totalCount = stats.count.load(std::memory_order_relaxed);
+    writeIdx = stats.writeIdx.load(std::memory_order_relaxed);
+    std::copy(std::begin(stats.history), std::end(stats.history),
+              std::begin(history));
+  }
 
   if (totalCount == 0) {
     ImGui::TextColored(colOff, "No executions yet.");
@@ -839,12 +874,11 @@ void GuiManager::RenderStateContent() {
     double maxError = -1e9;
     float chancePlot[Globals::kSuperglideHistorySize]{};
 
-    const int wIdx = stats.writeIdx.load(std::memory_order_relaxed);
     for (int i = 0; i < historyLen; ++i) {
       const int ri =
-          (wIdx - historyLen + i + Globals::kSuperglideHistorySize * 2) %
+          (writeIdx - historyLen + i + Globals::kSuperglideHistorySize * 2) %
           Globals::kSuperglideHistorySize;
-      const auto &r = stats.history[ri];
+      const auto &r = history[ri];
       sumChance += r.chancePercent;
       if (r.errorMs < minError)
         minError = r.errorMs;

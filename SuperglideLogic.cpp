@@ -116,10 +116,11 @@ void SuperglideThreadFunc(std::stop_token stopToken) {
       const double errorMs = (elapsedSec - frameTimeSec) * 1000.0;
 
       auto &stats = Globals::g_superglideStats;
-      const int idx =
-          stats.writeIdx.fetch_add(1, std::memory_order_relaxed) %
-          Globals::kSuperglideHistorySize;
+      std::lock_guard<std::mutex> lock(stats.mutex);
+      const int idx = stats.writeIdx.load(std::memory_order_relaxed) %
+                      Globals::kSuperglideHistorySize;
       stats.history[idx] = {elapsedFrames, chance, errorMs};
+      stats.writeIdx.store(idx + 1, std::memory_order_relaxed);
       stats.count.fetch_add(1, std::memory_order_relaxed);
     }
 

@@ -214,6 +214,24 @@ inline void DeleteCriticalSection(CRITICAL_SECTION* cs) {}
 inline void EnterCriticalSection(CRITICAL_SECTION* cs) {}
 inline void LeaveCriticalSection(CRITICAL_SECTION* cs) {}
 
+// File operation mocks
+#ifndef MOVEFILE_REPLACE_EXISTING
+#define MOVEFILE_REPLACE_EXISTING 0x1
+#endif
+#ifndef MOVEFILE_WRITE_THROUGH
+#define MOVEFILE_WRITE_THROUGH 0x8
+#endif
+inline BOOL DeleteFileA(const char* path) {
+    return std::remove(path) == 0;
+}
+inline BOOL MoveFileExA(const char* existingPath, const char* newPath,
+                        DWORD flags) {
+    if ((flags & MOVEFILE_REPLACE_EXISTING) != 0) {
+        std::remove(newPath);
+    }
+    return std::rename(existingPath, newPath) == 0;
+}
+
 // Code page constants
 #ifndef CP_ACP
 #define CP_ACP 0

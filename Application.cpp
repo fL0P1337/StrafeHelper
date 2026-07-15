@@ -49,6 +49,8 @@ std::atomic<std::atomic<int> *> g_bindingTarget{nullptr};
 namespace {
 std::unique_ptr<InputBackend> g_activeBackend;
 std::mutex g_backendMutex;
+Config::InputBackendKind g_activeBackendKind = Config::InputBackendKind::KbdHook;
+bool g_hasActiveBackendKind = false;
 } // namespace
 
 // -----------------------------------------------------------------------
@@ -98,51 +100,56 @@ void HandleSideMouseButton(int vkCode, bool isDown) {
 // -----------------------------------------------------------------------
 // SwitchBackend — callable from the GUI thread at runtime.
 // -----------------------------------------------------------------------
-void SwitchBackend(Config::InputBackendKind kind) {
-  std::lock_guard<std::mutex> lock(g_backendMutex);
-
-  const auto current =
-      static_cast<Config::InputBackendKind>(Config::SelectedBackend.load());
-  if (current == kind && g_activeBackend) {
-    return; // Already running the requested backend.
+bool SwitchBackend(Config::InputBackendKind kind) {
+  std::unique_ptr<InputBackend> previousBackend;
+  {
+    std::lock_guard<std::mutex> lock(g_backendMutex);
+    if (g_activeBackend && g_hasActiveBackendKind &&
+        g_activeBackendKind == kind) {
+      return true;
+    }
+    previousBackend = std::move(g_activeBackend);
+    g_hasActiveBackendKind = false;
   }
 
-  if (g_activeBackend) {
-    g_activeBackend->Shutdown();
-    g_activeBackend.reset();
+  if (previousBackend) {
+    previousBackend->Shutdown();
   }
 
-  Config::SelectedBackend.store(static_cast<int>(kind));
-  Config::SaveConfig();
-
-  auto makeBackend = [&]() -> std::unique_ptr<InputBackend> {
-    if (kind == Config::InputBackendKind::Interception) {
+  auto makeBackend = [](Config::InputBackendKind backendKind)
+      -> std::unique_ptr<InputBackend> {
+    if (backendKind == Config::InputBackendKind::Interception) {
       return std::make_unique<InterceptionBackend>();
     }
     return std::make_unique<KbdHookBackend>();
   };
 
-  std::unique_ptr<InputBackend> backend = makeBackend();
+  std::unique_ptr<InputBackend> backend = makeBackend(kind);
   backend->SetCallback(DispatchKeyEvent);
   if (!backend->Initialize()) {
     Logger::GetInstance().Log(
         "[SwitchBackend] Backend initialization failed. Falling back to KbdHook.");
     kind = Config::InputBackendKind::KbdHook;
-    Config::SelectedBackend.store(static_cast<int>(kind));
-    Config::SaveConfig();
-
-    backend = std::make_unique<KbdHookBackend>();
+    backend = makeBackend(kind);
     backend->SetCallback(DispatchKeyEvent);
     if (!backend->Initialize()) {
       Logger::GetInstance().Log(
           "[SwitchBackend] Fallback backend initialization failed!");
-      return;
+      return false;
     }
   }
 
-  g_activeBackend = std::move(backend);
-  Logger::GetInstance().Log(
-      std::string("[SwitchBackend] Switched to ") + g_activeBackend->Name());
+  const std::string backendName = backend->Name();
+  {
+    std::lock_guard<std::mutex> lock(g_backendMutex);
+    g_activeBackend = std::move(backend);
+    g_activeBackendKind = kind;
+    g_hasActiveBackendKind = true;
+  }
+  Config::SelectedBackend.store(static_cast<int>(kind));
+  Config::SaveConfig();
+  Logger::GetInstance().Log("[SwitchBackend] Switched to " + backendName);
+  return true;
 }
 
 bool GetActiveBackendStatus(BackendStatus &out) noexcept {
@@ -202,15 +209,20 @@ bool InitializeApplication(HINSTANCE hInstance) {
   {
     std::lock_guard<std::mutex> lock(g_backendMutex);
     g_activeBackend = std::move(backend);
+    g_activeBackendKind = static_cast<Config::InputBackendKind>(
+        Config::SelectedBackend.load(std::memory_order_relaxed));
+    g_hasActiveBackendKind = true;
   }
 
   if (!StartSpamThread()) {
+    std::unique_ptr<InputBackend> failedBackend;
     {
       std::lock_guard<std::mutex> lock(g_backendMutex);
-      if (g_activeBackend) {
-        g_activeBackend->Shutdown();
-        g_activeBackend.reset();
-      }
+      failedBackend = std::move(g_activeBackend);
+      g_hasActiveBackendKind = false;
+    }
+    if (failedBackend) {
+      failedBackend->Shutdown();
     }
     if (Globals::g_hWindow)
       DestroyWindow(Globals::g_hWindow);
@@ -234,12 +246,14 @@ void CleanupApplication() {
   StopTurboJumpThread();
   StopSuperglideThread();
 
+  std::unique_ptr<InputBackend> backend;
   {
     std::lock_guard<std::mutex> lock(g_backendMutex);
-    if (g_activeBackend) {
-      g_activeBackend->Shutdown();
-      g_activeBackend.reset();
-    }
+    backend = std::move(g_activeBackend);
+    g_hasActiveBackendKind = false;
+  }
+  if (backend) {
+    backend->Shutdown();
   }
 
   DestroyAppWindow();

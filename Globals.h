@@ -4,6 +4,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <windows.h>
 #include <shellapi.h>
 
@@ -97,6 +98,7 @@ struct SuperglideResult {
 constexpr int kSuperglideHistorySize = 32;
 
 struct SuperglideStats {
+  std::mutex mutex;
   SuperglideResult history[kSuperglideHistorySize]{};
   std::atomic<int> count{0};
   std::atomic<int> writeIdx{0};
