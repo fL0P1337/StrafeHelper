@@ -52,6 +52,19 @@ std::unique_ptr<InputBackend> g_activeBackend;
 std::mutex g_backendMutex;
 Config::InputBackendKind g_activeBackendKind = Config::InputBackendKind::KbdHook;
 bool g_hasActiveBackendKind = false;
+std::atomic<DWORD> g_lastInjectionError{ERROR_SUCCESS};
+
+void ReportInjectionFailure() noexcept {
+  DWORD error = GetLastError();
+  if (error == ERROR_SUCCESS) {
+    error = ERROR_GEN_FAILURE;
+  }
+  const DWORD previous =
+      g_lastInjectionError.exchange(error, std::memory_order_acq_rel);
+  if (previous == ERROR_SUCCESS && Globals::g_hWindow) {
+    PostMessageW(Globals::g_hWindow, Globals::WM_INJECTION_FAILED, error, 0);
+  }
+}
 } // namespace
 
 // -----------------------------------------------------------------------
@@ -174,6 +187,14 @@ bool GetActiveBackendStatus(BackendStatus &out) noexcept {
   return false;
 }
 
+DWORD GetLastInjectionError() noexcept {
+  return g_lastInjectionError.load(std::memory_order_acquire);
+}
+
+void ClearInjectionError() noexcept {
+  g_lastInjectionError.store(ERROR_SUCCESS, std::memory_order_release);
+}
+
 // -----------------------------------------------------------------------
 // InitializeApplication / CleanupApplication — top-level lifecycle.
 // -----------------------------------------------------------------------
@@ -228,25 +249,13 @@ bool InitializeApplication(HINSTANCE hInstance) {
     g_hasActiveBackendKind = true;
   }
 
-  if (!StartSpamThread()) {
-    std::unique_ptr<InputBackend> failedBackend;
-    {
-      std::lock_guard<std::mutex> lock(g_backendMutex);
-      failedBackend = std::move(g_activeBackend);
-      g_hasActiveBackendKind = false;
-    }
-    if (failedBackend) {
-      failedBackend->Shutdown();
-    }
-    if (Globals::g_hWindow)
-      DestroyWindow(Globals::g_hWindow);
-    UnregisterClass(Config::WINDOW_CLASS_NAME, Globals::g_hInstance);
+  if (!StartSpamThread() || !StartTurboLootThread() ||
+      !StartTurboJumpThread() || !StartSuperglideThread()) {
+    Logger::GetInstance().Log(
+        "[InitializeApplication] Failed to start feature workers.");
+    CleanupApplication();
     return false;
   }
-
-  StartTurboLootThread();
-  StartTurboJumpThread();
-  StartSuperglideThread();
 
   Logger::GetInstance().Log("Application Initialization Successful.");
   return true;
@@ -306,8 +315,16 @@ bool InjectKeys(const int *keys, std::size_t count, bool keyDown) noexcept {
       flags |= NEO_KEY_E0;
     }
     const uint16_t sc = static_cast<uint16_t>(scanCode & 0xFFu);
-    if (sc == 0 || !g_activeBackend->InjectKey(sc, flags)) {
+    bool injected = false;
+    if (sc != 0) {
+      const int attempts = keyDown ? 1 : 3;
+      for (int attempt = 0; attempt < attempts && !injected; ++attempt) {
+        injected = g_activeBackend->InjectKey(sc, flags);
+      }
+    }
+    if (!injected) {
       allInjected = false;
+      ReportInjectionFailure();
     }
   }
   return allInjected;

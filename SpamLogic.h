@@ -5,7 +5,7 @@
 
 // Injects key-down or key-up events through the active input backend.
 // `count` must be <= 4 (WASD bound).
-void SendKeyInputBatch(const int *keys, std::size_t count, bool keyDown);
+[[nodiscard]] bool SendKeyInputBatch(const int *keys, std::size_t count, bool keyDown);
 void CleanupSpamState(bool restoreHeldKeys);
 
 bool StartSpamThread();

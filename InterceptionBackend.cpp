@@ -21,6 +21,22 @@ constexpr size_t kStrokeBatch = 32;
   }
   return qpc.QuadPart;
 }
+
+[[nodiscard]] bool ReplayWithSendInput(
+    const InterceptionKeyStroke &stroke) noexcept {
+  INPUT input{};
+  input.type = INPUT_KEYBOARD;
+  input.ki.wScan = stroke.code;
+  input.ki.dwFlags = KEYEVENTF_SCANCODE;
+  input.ki.dwExtraInfo = NEO_SYNTHETIC_INFORMATION;
+  if ((stroke.state & static_cast<uint16_t>(INTERCEPTION_KEY_UP)) != 0u) {
+    input.ki.dwFlags |= KEYEVENTF_KEYUP;
+  }
+  if ((stroke.state & static_cast<uint16_t>(INTERCEPTION_KEY_E0)) != 0u) {
+    input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+  }
+  return SendInput(1, &input, sizeof(INPUT)) == 1;
+}
 } // namespace
 
 InterceptionBackend::~InterceptionBackend() noexcept { Shutdown(); }
@@ -216,6 +232,26 @@ void InterceptionBackend::ThreadMain() noexcept {
         eventsDropped_.fetch_add(1, std::memory_order_relaxed);
       } else {
         if (!SendOnDevice(device, *keyStroke, false)) {
+          int replayed = 0;
+          for (int replayIndex = i; replayIndex < received; ++replayIndex) {
+            const auto *pending = reinterpret_cast<const InterceptionKeyStroke *>(
+                &strokes[static_cast<size_t>(replayIndex)]);
+            if (ReplayWithSendInput(*pending)) {
+              ++replayed;
+            }
+          }
+          Logger::GetInstance().Log(
+              "[InterceptionBackend] pass-through failed; replayed " +
+              std::to_string(replayed) + " of " +
+              std::to_string(received - i) + " pending strokes via SendInput.");
+          if (replayed != received - i && Globals::g_hWindow) {
+            DWORD error = GetLastError();
+            if (error == ERROR_SUCCESS) {
+              error = ERROR_GEN_FAILURE;
+            }
+            PostMessageW(Globals::g_hWindow, Globals::WM_INJECTION_FAILED,
+                         error, 0);
+          }
           sendFailed = true;
           break;
         }

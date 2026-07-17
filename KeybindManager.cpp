@@ -19,8 +19,10 @@ namespace KeybindManager {
 // but atomics keep us safe if that changes.
 static std::array<std::atomic<bool>, 256> g_previousKeyState{};
 static std::atomic<int> g_pendingBindReleaseVk{0};
+static std::atomic<BindResult> g_lastBindResult{BindResult::None};
 
 void Initialize() {
+  g_lastBindResult.store(BindResult::None, std::memory_order_relaxed);
   for (auto &v : g_previousKeyState) {
     v.store(false, std::memory_order_relaxed);
   }
@@ -175,6 +177,14 @@ bool IsSuperglideActive() {
   return false; // One-shot trigger, no persistent active state.
 }
 
+BindResult GetLastBindResult() noexcept {
+  return g_lastBindResult.load(std::memory_order_acquire);
+}
+
+void ClearLastBindResult() noexcept {
+  g_lastBindResult.store(BindResult::None, std::memory_order_release);
+}
+
 // -----------------------------------------------------------------------
 // Dynamic keybinding capture
 // -----------------------------------------------------------------------
@@ -183,6 +193,10 @@ bool HandleBind(int vkCode, bool isKeyDown) {
   const int pendingRelease =
       g_pendingBindReleaseVk.load(std::memory_order_acquire);
   if (!isKeyDown && pendingRelease == vkCode) {
+    Globals::g_KeyInfo[vkCode].physicalKeyDown.store(
+        false, std::memory_order_release);
+    g_previousKeyState[static_cast<size_t>(vkCode)].store(
+        false, std::memory_order_relaxed);
     g_pendingBindReleaseVk.store(0, std::memory_order_release);
     return true;
   }
@@ -197,12 +211,14 @@ bool HandleBind(int vkCode, bool isKeyDown) {
   }
 
   if (vkCode == VK_ESCAPE) {
+    g_lastBindResult.store(BindResult::Cancelled, std::memory_order_release);
     Globals::g_bindingTarget.store(nullptr);
     return true;
   }
 
   if (vkCode == VK_LBUTTON || vkCode == VK_RBUTTON || vkCode == VK_MBUTTON ||
       vkCode == VK_LWIN || vkCode == VK_RWIN || vkCode <= 0 || vkCode >= 256) {
+    g_lastBindResult.store(BindResult::Unsupported, std::memory_order_release);
     Globals::g_bindingTarget.store(nullptr);
     return true;
   }
@@ -216,11 +232,13 @@ bool HandleBind(int vkCode, bool isKeyDown) {
   for (const auto *binding : bindings) {
     if (binding != target &&
         binding->load(std::memory_order_relaxed) == vkCode) {
+      g_lastBindResult.store(BindResult::Duplicate, std::memory_order_release);
       return true;
     }
   }
 
   target->store(vkCode, std::memory_order_relaxed);
+  g_lastBindResult.store(BindResult::Success, std::memory_order_release);
   Globals::g_KeyInfo[vkCode].physicalKeyDown.store(true,
                                                     std::memory_order_release);
   g_previousKeyState[static_cast<size_t>(vkCode)].store(

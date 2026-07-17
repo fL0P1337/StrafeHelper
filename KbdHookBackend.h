@@ -32,9 +32,6 @@ public:
     return "KbdHookBackend";
   }
 
-  [[nodiscard]] bool CanSuppressPhysical() const noexcept override {
-    return true;
-  }
 
 private:
   struct StartupState {

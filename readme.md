@@ -18,7 +18,7 @@ Stop paying for macro apps that do one simple thing. StrafeHelper is a transpare
 | **Turbo Jump** | Auto-repeats a jump key at configurable speed while held. |
 | **Superglide** | One-press automation of the Jump → (1 frame) → Crouch sequence with sub-millisecond QPC timing. |
 | **Dual Input Backends** | WH_KEYBOARD_LL hook (default) or Interception kernel driver, hot-switchable at runtime. |
-| **ImGui GUI** | Tabbed interface: Config, State Monitor, Console. All binds rebindable in-app. |
+| **ImGui GUI** | Tabbed interface: Config, State Monitor, Console. All feature trigger binds are rebindable in-app. |
 
 ---
 
@@ -44,7 +44,7 @@ The mantle timing is the human element — StrafeHelper removes hardware timing 
 You still need to time the mantle window yourself — StrafeHelper guarantees the Jump→Crouch interval is pixel-perfect every time.
 
 **Timing precision:**  
-Frame duration = `freq / targetFPS` in QPC ticks (no integer truncation). Hybrid wait: coarse `Sleep(1)` + QPC busy-spin for the final 0.5 ms. Achieves <10 µs accuracy at any frame rate.
+Frame duration = `freq / targetFPS` in QPC ticks. Hybrid wait: coarse `Sleep(1)` plus QPC busy-spin for the final 0.5 ms. Targets sub-millisecond scheduling accuracy; actual in-game receipt still depends on Windows scheduling and the game input pipeline.
 
 **Config options (in-app or `config.cfg`):**
 
@@ -52,7 +52,9 @@ Frame duration = `freq / targetFPS` in QPC ticks (no integer truncation). Hybrid
 |---|---|---|
 | `enable_superglide` | `false` | Master toggle |
 | `superglide_bind` | `192` (tilde `~`) | VK code of the trigger key |
-| `target_fps` | `60.0` | Game frame rate — determines the 1-frame delay |
+| `target_fps` | `60.0` | Game frame rate; determines the 1-frame delay |
+
+The Superglide trigger is rebindable. Injected Jump and Crouch remain Apex defaults: Space and Left Ctrl.
 
 A 500 ms cooldown after each execution prevents accidental re-trigger from key-hold auto-repeat.
 
@@ -69,7 +71,7 @@ Both backends are selectable from the **Config** tab at runtime without restarti
 | | |
 |---|---|
 | Driver required | ✗ |
-| Physical key suppression | ✗ (passthrough only) |
+| Physical key suppression | Yes, at the user-mode hook layer |
 
 ### Interception *(optional)*
 
@@ -79,7 +81,7 @@ Kernel-mode filter driver via [Interception](https://github.com/oblitum/Intercep
 |---|---|
 | Driver required | ✓ [Interception driver](https://github.com/oblitum/Interception/releases) |
 | DLL required | ✓ `interception.dll` next to the exe |
-| Physical key suppression | ✓ |
+| Physical key suppression | Yes, at the kernel filter layer |
 
 **Setup:** Install the driver, place `interception.dll` next to the exe, launch StrafeHelper. The Config tab shows a live status badge:
 
@@ -133,6 +135,14 @@ Or from PowerShell:
 $msbuild = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\Community\MSBuild" -Recurse -Filter "MSBuild.exe" | Select-Object -First 1 -ExpandProperty FullName
 & $msbuild StrafeHelper.sln /p:Configuration=Release /p:Platform=x64 /m
 ```
+
+---
+
+## Tests
+
+`StrafeHelperTests` covers configuration validation, key conversion, Superglide sequencing, physical edge tracking, duplicate-bind reporting, and first-press behavior after rebinding.
+
+Build and run `Debug | x64` or `Release | x64`; assertions remain enabled in both test configurations.
 
 ---
 

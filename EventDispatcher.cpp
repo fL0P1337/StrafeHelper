@@ -24,22 +24,9 @@
 #include "SuperglideLogic.h"
 #include "TurboLogic.h"
 
-#include <chrono>
-
-namespace {
-
-// Returns the current steady-clock timestamp in nanoseconds. steady_clock
-// is monotonically increasing and is backed by QPC on Windows, so this is
-// the same time source the spam thread observes via PrecisionTimer.
-[[nodiscard]] inline int64_t NowNs() noexcept {
-  return std::chrono::steady_clock::now().time_since_epoch().count();
-}
-
-} // namespace
-
 bool HandleFeatureKeyEvent(int vkCode, bool isKeyDown) noexcept {
   // ------------------------------------------------------------
-  // Strict edge tracking: drop autorepeats and bounces.
+  // Strict edge tracking: drop autorepeats.
   //
   // - Autorepeat: Windows fires a continuous stream of WM_KEYDOWN for held
   //   keys with no intervening WM_KEYUP. Every event drove the full feature
@@ -47,14 +34,8 @@ bool HandleFeatureKeyEvent(int vkCode, bool isKeyDown) noexcept {
   //   short-circuit any event that doesn't actually change the cached
   //   physical state of the VK.
   //
-  // - Bounce / driver echo: opposite-edge transitions that arrive within
-  //   DebounceUs of the previous transition are treated as chatter and
-  //   dropped. The default 500 µs window is far below human dexterity but
-  //   above typical mechanical-switch debounce.
-  //
-  // Mouse buttons (X1/X2) live in the same VK space and benefit from the
-  // same edge/debounce filter. The dispatch routing below cares only about
-  // genuine transitions, so suppressing pseudo-events here is safe.
+  // Opposite edges are always authoritative. Dropping one would let the
+  // target application observe a transition that our cached state missed.
   // ------------------------------------------------------------
   if (vkCode >= 0 && vkCode < 256) {
     auto &state = Globals::g_KeyInfo[vkCode];
@@ -63,20 +44,6 @@ bool HandleFeatureKeyEvent(int vkCode, bool isKeyDown) noexcept {
       // No state change — autorepeat or echo. Don't forward to features and
       // don't suppress at OS level (the game handles autorepeat itself).
       return false;
-    }
-
-    const int debounceUs = Config::DebounceUs.load(std::memory_order_relaxed);
-    if (debounceUs > 0) {
-      const int64_t nowNs = NowNs();
-      const int64_t lastNs = state.lastEdgeNs.load(std::memory_order_relaxed);
-      const int64_t debounceNs = static_cast<int64_t>(debounceUs) * 1000;
-      // First edge for this VK (lastNs == 0) is never treated as bounce.
-      if (lastNs != 0 && (nowNs - lastNs) < debounceNs) {
-        return false; // Bounce — drop silently.
-      }
-      state.lastEdgeNs.store(nowNs, std::memory_order_relaxed);
-    } else {
-      state.lastEdgeNs.store(NowNs(), std::memory_order_relaxed);
     }
 
     // Publish the new physical state with release semantics so observers

@@ -17,7 +17,6 @@ SuperglideStats g_superglideStats{};
 
 std::atomic<std::atomic<int>*> g_bindingTarget = nullptr;
 
-NOTIFYICONDATA g_nid{};
 
 } // namespace Globals
 

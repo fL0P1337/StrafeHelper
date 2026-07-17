@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <mutex>
 #include <windows.h>
-#include <shellapi.h>
 
 namespace Globals {
 
@@ -15,14 +14,9 @@ extern HWND g_hWindow;
 extern HINSTANCE g_hInstance;
 
 // --- State Management ---
-// `lastEdgeNs` is the steady-clock nanosecond timestamp of the last
-// transition observed for this VK; used by the debounce filter in
-// EventDispatcher to reject mechanical-switch chatter / driver echo.
-// Single-writer (hook thread), so relaxed ordering is sufficient.
 struct KeyState {
   std::atomic<bool> physicalKeyDown{false};
   std::atomic<bool> spamming{false};
-  std::atomic<int64_t> lastEdgeNs{0};
 
   KeyState() = default;
   KeyState(const KeyState &) = delete;
@@ -109,16 +103,9 @@ extern SuperglideStats g_superglideStats;
 // --- Binding State ---
 extern std::atomic<std::atomic<int>*> g_bindingTarget;
 
-// --- Tray Icon ---
-extern NOTIFYICONDATA g_nid;
-
-// Tray icon constants (constexpr replaces #define; macros ignore namespaces)
-inline constexpr UINT WM_TRAYICON           = WM_APP + 1;
-inline constexpr UINT WM_DEFERRED_CONFIG_SAVE = WM_APP + 2;
-inline constexpr UINT WM_BACKEND_FAILED        = WM_APP + 3;
-inline constexpr UINT ID_TRAY_APP_ICON      = 1001;
-inline constexpr UINT ID_TRAY_EXIT_MENU_ITEM    = 3000;
-inline constexpr UINT ID_TRAY_TOGGLE_SPAM_ITEM  = 3002;
-inline constexpr UINT ID_TRAY_TOGGLE_SNAPTAP_ITEM = 3003;
+// --- Application messages ---
+inline constexpr UINT WM_DEFERRED_CONFIG_SAVE = WM_APP + 1;
+inline constexpr UINT WM_BACKEND_FAILED = WM_APP + 2;
+inline constexpr UINT WM_INJECTION_FAILED = WM_APP + 3;
 
 } // namespace Globals

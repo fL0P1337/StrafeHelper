@@ -35,6 +35,15 @@ typedef struct _CRITICAL_SECTION {} CRITICAL_SECTION;
 
 #define WINAPI
 #define CALLBACK
+#ifndef WM_APP
+#define WM_APP 0x8000
+#endif
+#ifndef VK_LWIN
+#define VK_LWIN 0x5B
+#endif
+#ifndef VK_RWIN
+#define VK_RWIN 0x5C
+#endif
 #ifndef NULL
 #define NULL 0
 #endif
@@ -239,16 +248,36 @@ inline BOOL MoveFileExA(const char* existingPath, const char* newPath,
     }
     return std::rename(existingPath, newPath) == 0;
 }
+inline BOOL DeleteFileW(const wchar_t* path) {
+    const std::wstring wide(path);
+    std::string narrow;
+    narrow.reserve(wide.size());
+    for (wchar_t ch : wide) narrow.push_back(static_cast<char>(ch));
+    return std::remove(narrow.c_str()) == 0;
+}
+inline BOOL MoveFileExW(const wchar_t* existingPath, const wchar_t* newPath,
+                        DWORD flags) {
+    const std::wstring existingWide(existingPath);
+    const std::wstring newWide(newPath);
+    std::string existing;
+    existing.reserve(existingWide.size());
+    for (wchar_t ch : existingWide) existing.push_back(static_cast<char>(ch));
+    std::string replacement;
+    replacement.reserve(newWide.size());
+    for (wchar_t ch : newWide) replacement.push_back(static_cast<char>(ch));
+    if ((flags & MOVEFILE_REPLACE_EXISTING) != 0) {
+        std::remove(replacement.c_str());
+    }
+    return std::rename(existing.c_str(), replacement.c_str()) == 0;
+}
+inline BOOL PostMessageW(HWND, UINT, WPARAM, LPARAM) { return TRUE; }
 
 // Code page constants
 #ifndef CP_ACP
 #define CP_ACP 0
 #endif
 
-// WideCharToMultiByte stub — returns empty narrow path in test context.
-// GetExecutableDirectory() returns a well-known mock path; the test stub
-// for GetExecutableDirectory() (in stub_utils.cpp) already returns L""
-// so GetConfigFilePath() will fall back to CONFIG_FILE_NAME anyway.
+// Legacy conversion stub retained for older tests.
 inline int WideCharToMultiByte(unsigned int /*CodePage*/, DWORD /*dwFlags*/,
                                const wchar_t* /*lpWideCharStr*/, int /*cchWideChar*/,
                                char* lpMultiByteStr, int cbMultiByte,

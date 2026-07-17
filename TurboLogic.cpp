@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <system_error>
 #include <timeapi.h>
 #include <windows.h>
 
@@ -80,7 +81,9 @@ void RunTurboLoop(std::stop_token stopToken,
       break;
     }
 
-    (void)InjectKey(key, false);
+    if (!InjectKey(key, false)) {
+      break;
+    }
   }
 
   timeEndPeriod(1);
@@ -122,7 +125,13 @@ void TurboJumpThreadFunc(std::stop_token stopToken) {
 
 bool StartTurboLootThread() {
   StopTurboLootThread();
-  g_turboLootThread = std::jthread(TurboLootThreadFunc);
+  try {
+    g_turboLootThread = std::jthread(TurboLootThreadFunc);
+  } catch (const std::system_error &e) {
+    Logger::GetInstance().Log(std::string("Failed to start TurboLoot thread: ") +
+                              e.what());
+    return false;
+  }
   Logger::GetInstance().Log("TurboLoot thread started.");
   return true;
 }
@@ -133,7 +142,13 @@ void StopTurboLootThread() {
 
 bool StartTurboJumpThread() {
   StopTurboJumpThread();
-  g_turboJumpThread = std::jthread(TurboJumpThreadFunc);
+  try {
+    g_turboJumpThread = std::jthread(TurboJumpThreadFunc);
+  } catch (const std::system_error &e) {
+    Logger::GetInstance().Log(std::string("Failed to start TurboJump thread: ") +
+                              e.what());
+    return false;
+  }
   Logger::GetInstance().Log("TurboJump thread started.");
   return true;
 }

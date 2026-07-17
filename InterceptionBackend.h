@@ -35,9 +35,6 @@ public:
     return "InterceptionBackend";
   }
 
-  [[nodiscard]] bool CanSuppressPhysical() const noexcept override {
-    return true;
-  }
 
 private:
   using create_context_fn = decltype(&interception_create_context);

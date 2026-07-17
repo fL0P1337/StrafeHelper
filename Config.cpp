@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <mutex>
@@ -19,6 +20,7 @@
 namespace Config {
 namespace {
 std::mutex g_configIoMutex;
+std::atomic<bool> g_lastSaveSucceeded{true};
 
 std::string TrimCopy(const std::string& value) {
   const size_t first = value.find_first_not_of(" \t\n\r\f\v");
@@ -163,7 +165,6 @@ void ValidateConfigValues() {
   clampInt(TurboJumpDelayMs, 0, 1000, "turbo_jump_delay");
   clampInt(TurboJumpDurationMs, 0, 1000, "turbo_jump_duration");
   clampInt(JitterMs, 0, 1000, "jitter_ms");
-  clampInt(DebounceUs, 0, 1000000, "debounce_us");
 
   const double fps = TargetFPS.load(std::memory_order_relaxed);
   if (!std::isfinite(fps) || fps < 30.0 || fps > 300.0) {
@@ -221,7 +222,6 @@ void ValidateConfigValues() {
 namespace Keys {
   constexpr const char* kSpamDelayMs          = "spam_delay_ms";
   constexpr const char* kSpamKeyDownDuration   = "spam_key_down_duration";
-  constexpr const char* kIsLocked              = "is_locked";
   constexpr const char* kEnableSpam            = "enable_spam";
   constexpr const char* kEnableSnapTap         = "enable_snaptap";
   constexpr const char* kKeySpamTrigger        = "key_spam_trigger";
@@ -243,7 +243,6 @@ namespace Keys {
   constexpr const char* kSuperglideMode        = "superglide_mode";
   constexpr const char* kEnableJitter          = "enable_jitter";
   constexpr const char* kJitterMs              = "jitter_ms";
-  constexpr const char* kDebounceUs            = "debounce_us";
 } // namespace Keys
 
 // --- Definitions of extern variables from Config.h ---
@@ -254,34 +253,18 @@ const char CONFIG_FILE_NAME[] = "config.cfg";
 const TCHAR WINDOW_CLASS_NAME[] = TEXT("StrafeHelperWindowClass");
 const TCHAR WINDOW_TITLE[] = TEXT("StrafeHelper Hidden Window");
 
-// Returns the full path to the config file, located next to the executable.
-static std::string GetConfigFilePath() {
+// Returns the config path next to the executable without narrowing Unicode.
+static std::filesystem::path GetConfigFilePath() {
   const std::wstring dir = GetExecutableDirectory();
   if (dir.empty()) {
-    return CONFIG_FILE_NAME; // Fallback to CWD
+    return std::filesystem::path(CONFIG_FILE_NAME);
   }
-#ifdef _WIN32
-  // Convert the wide-char directory path to a narrow string.
-  const int needed = WideCharToMultiByte(CP_ACP, 0, dir.c_str(), -1,
-                                         nullptr, 0, nullptr, nullptr);
-  if (needed <= 0) {
-    return CONFIG_FILE_NAME;
-  }
-  std::string narrowDir(static_cast<size_t>(needed), '\0');
-  WideCharToMultiByte(CP_ACP, 0, dir.c_str(), -1, narrowDir.data(), needed,
-                      nullptr, nullptr);
-  narrowDir.pop_back();
-  return narrowDir + CONFIG_FILE_NAME;
-#else
-  // Non-Windows fallback: use CWD
-  return CONFIG_FILE_NAME;
-#endif
+  return std::filesystem::path(dir) / CONFIG_FILE_NAME;
 }
 
 // Initialize atomics with defaults
 std::atomic<int> SpamDelayMs{10};
 std::atomic<int> SpamKeyDownDurationMs{5};
-std::atomic<bool> IsLocked{false};
 std::atomic<bool> EnableSpam{true};
 std::atomic<bool> EnableSnapTap{true};
 std::atomic<int> KeySpamTrigger{'C'}; // VK_KEY 'C'
@@ -318,9 +301,6 @@ std::atomic<bool> SuperglideToggleActive{false};
 std::atomic<bool> EnableJitter{false};
 std::atomic<int> JitterMs{3};
 
-// Edge-debounce window in microseconds (per VK). 0 disables.
-std::atomic<int> DebounceUs{500};
-
 void ValidateConfig() {
   ValidateConfigValues();
 }
@@ -328,11 +308,10 @@ void ValidateConfig() {
 // --- Implementation of LoadConfig ---
 void LoadConfig() {
   std::lock_guard<std::mutex> ioLock(g_configIoMutex);
-  const std::string configPath = GetConfigFilePath();
+  const std::filesystem::path configPath = GetConfigFilePath();
   std::ifstream configFile(configPath);
   if (!configFile.is_open()) {
-    std::string logMsg = "Config file '" + configPath +
-                         "' not found. Using defaults.\n";
+    std::string logMsg = "Config file not found. Using defaults.\n";
     logMsg += " Defaults: Delay=" + std::to_string(SpamDelayMs.load()) +
               "ms, Duration=" + std::to_string(SpamKeyDownDurationMs.load()) +
               "ms, Trigger=" + FormatVirtualKeyName(KeySpamTrigger.load()) +
@@ -342,7 +321,7 @@ void LoadConfig() {
     return;
   }
 
-  Logger::GetInstance().Log("Loading configuration from " + configPath + "...");
+  Logger::GetInstance().Log("Loading configuration...");
   std::string line;
   int lineNumber = 0;
   bool hasEnableSpam = false;
@@ -385,8 +364,6 @@ void LoadConfig() {
         SpamDelayMs = std::stoi(value);
       else if (key == "SPAM_KEY_DOWN_DURATION" || key == Keys::kSpamKeyDownDuration)
         SpamKeyDownDurationMs = std::stoi(value);
-      else if (key == "isLocked" || key == Keys::kIsLocked)
-        IsLocked = ParseBoolValue(value);
       else if (key == Keys::kEnableSpam) {
         EnableSpam = ParseBoolValue(value);
         hasEnableSpam = true;
@@ -454,11 +431,6 @@ void LoadConfig() {
         if (v >= 0)
           JitterMs = v;
       }
-      else if (key == Keys::kDebounceUs) {
-        int v = std::stoi(value);
-        if (v >= 0)
-          DebounceUs = v;
-      }
     } catch (const std::exception &e) {
       Logger::GetInstance().Log("Warning: Invalid config value on line " +
                                 std::to_string(lineNumber) + " for key '" +
@@ -481,8 +453,6 @@ void LoadConfig() {
   logMsg += "  SPAM_DELAY_MS: " + std::to_string(SpamDelayMs.load()) + "\n";
   logMsg += "  SPAM_KEY_DOWN_DURATION: " +
             std::to_string(SpamKeyDownDurationMs.load()) + "\n";
-  logMsg +=
-      "  isLocked: " + std::string(IsLocked.load() ? "true" : "false") + "\n";
   logMsg +=
       "  enable_spam: " + std::string(EnableSpam.load() ? "true" : "false") +
       "\n";
@@ -509,13 +479,13 @@ void LoadConfig() {
   Logger::GetInstance().Log(logMsg);
 }
 
-void SaveConfig() {
+bool SaveConfig() {
   std::lock_guard<std::mutex> ioLock(g_configIoMutex);
   ValidateConfig();
 
   // Update-in-place: preserve unknown keys/comments, replace known keys, append
   // missing ones.
-  const std::string configPath = GetConfigFilePath();
+  const std::filesystem::path configPath = GetConfigFilePath();
   std::vector<std::string> lines;
   {
     std::ifstream in(configPath);
@@ -533,7 +503,6 @@ void SaveConfig() {
   Entry entries[] = {
       {Keys::kSpamDelayMs,       std::to_string(SpamDelayMs.load()), false},
       {Keys::kSpamKeyDownDuration, std::to_string(SpamKeyDownDurationMs.load()), false},
-      {Keys::kIsLocked,          IsLocked.load() ? "true" : "false", false},
       {Keys::kEnableSpam,        EnableSpam.load() ? "true" : "false", false},
       {Keys::kEnableSnapTap,     EnableSnapTap.load() ? "true" : "false", false},
       {Keys::kKeySpamTrigger,    FormatConfigKey(KeySpamTrigger.load()), false},
@@ -555,7 +524,6 @@ void SaveConfig() {
       {Keys::kSuperglideMode,    std::to_string(static_cast<int>(KeybindMode::Hold)), false},
       {Keys::kEnableJitter,      EnableJitter.load() ? "true" : "false", false},
       {Keys::kJitterMs,          std::to_string(JitterMs.load()), false},
-      {Keys::kDebounceUs,        std::to_string(DebounceUs.load()), false},
   };
 
   auto trim = [](std::string &s) {
@@ -624,12 +592,13 @@ void SaveConfig() {
     }
   }
 
-  const std::string tempPath = configPath + ".tmp";
+  std::filesystem::path tempPath = configPath;
+  tempPath += L".tmp";
   std::ofstream out(tempPath, std::ios::trunc);
   if (!out.is_open()) {
-    Logger::GetInstance().Log("Warning: Failed to open config file '" +
-                              tempPath + "' for writing.");
-    return;
+    Logger::GetInstance().Log("Warning: Failed to open temporary config file.");
+    g_lastSaveSucceeded.store(false, std::memory_order_release);
+    return false;
   }
 
   for (size_t i = 0; i < lines.size(); ++i) {
@@ -639,21 +608,27 @@ void SaveConfig() {
   }
   out.close();
   if (!out) {
-    DeleteFileA(tempPath.c_str());
-    Logger::GetInstance().Log("Warning: Failed to write config file '" +
-                              tempPath + "'.");
-    return;
+    DeleteFileW(tempPath.c_str());
+    Logger::GetInstance().Log("Warning: Failed to write temporary config file.");
+    g_lastSaveSucceeded.store(false, std::memory_order_release);
+    return false;
   }
 
-  if (!MoveFileExA(tempPath.c_str(), configPath.c_str(),
+  if (!MoveFileExW(tempPath.c_str(), configPath.c_str(),
                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-    DeleteFileA(tempPath.c_str());
-    Logger::GetInstance().Log("Warning: Failed to replace config file '" +
-                              configPath + "'.");
-    return;
+    DeleteFileW(tempPath.c_str());
+    Logger::GetInstance().Log("Warning: Failed to replace config file.");
+    g_lastSaveSucceeded.store(false, std::memory_order_release);
+    return false;
   }
 
-  Logger::GetInstance().Log("Configuration saved to " + configPath);
+  g_lastSaveSucceeded.store(true, std::memory_order_release);
+  Logger::GetInstance().Log("Configuration saved.");
+  return true;
+}
+
+bool LastSaveSucceeded() noexcept {
+  return g_lastSaveSucceeded.load(std::memory_order_acquire);
 }
 
 } // namespace Config

@@ -22,6 +22,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <system_error>
 #include <timeapi.h> // timeBeginPeriod / timeEndPeriod
 #include <windows.h>
 
@@ -46,7 +47,11 @@ static bool InjectKeyTap(int vk) noexcept {
   if (!InjectKey(vk, true)) {
     return false;
   }
-  return InjectKey(vk, false);
+  if (!InjectKey(vk, false)) {
+    (void)InjectKey(vk, false);
+    return false;
+  }
+  return true;
 }
 
 // Generic stop helper shared with TurboLogic pattern.
@@ -169,7 +174,13 @@ void SuperglideThreadFunc(std::stop_token stopToken) {
 
 bool StartSuperglideThread() {
   StopSuperglideThread();
-  g_superglideThread = std::jthread(SuperglideThreadFunc);
+  try {
+    g_superglideThread = std::jthread(SuperglideThreadFunc);
+  } catch (const std::system_error &e) {
+    Logger::GetInstance().Log(std::string("Failed to start Superglide thread: ") +
+                              e.what());
+    return false;
+  }
   Logger::GetInstance().Log("Superglide thread started.");
   return true;
 }

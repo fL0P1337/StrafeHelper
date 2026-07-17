@@ -4,6 +4,9 @@
 #include "Config.h"
 #include "Globals.h"
 #include "Logger.h"
+#include "SpamLogic.h"
+#include "SuperglideLogic.h"
+#include "TurboLogic.h"
 #include "Utils.h"
 #include <tchar.h>
 #include <vector>
@@ -49,8 +52,32 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   case Globals::WM_BACKEND_FAILED:
     Logger::GetInstance().Log(
         "Interception backend became unhealthy; falling back to WinHook.");
-    (void)SwitchBackend(Config::InputBackendKind::KbdHook);
+    if (!SwitchBackend(Config::InputBackendKind::KbdHook)) {
+      MessageBoxA(nullptr, "Both input backends failed. Restart StrafeHelper.",
+                  "Input Backend Failure", MB_OK | MB_ICONERROR);
+    }
     return 0;
+
+  case Globals::WM_INJECTION_FAILED:
+    Config::EnableSpam.store(false, std::memory_order_relaxed);
+    Config::EnableTurboLoot.store(false, std::memory_order_relaxed);
+    Config::EnableTurboJump.store(false, std::memory_order_relaxed);
+    Config::EnableSuperglide.store(false, std::memory_order_relaxed);
+    Config::KeySpamTriggerToggleActive.store(false, std::memory_order_relaxed);
+    Config::TurboLootToggleActive.store(false, std::memory_order_relaxed);
+    Config::TurboJumpToggleActive.store(false, std::memory_order_relaxed);
+    Globals::g_isSpamActive.store(false, std::memory_order_release);
+    Globals::g_lurchState.store(0, std::memory_order_release);
+    TriggerSpamEvent();
+    TriggerTurboLoot();
+    TriggerTurboJump();
+    TriggerSuperglide();
+    Logger::GetInstance().Log(
+        "Input injection failed (Win32 error " +
+        std::to_string(static_cast<DWORD>(wParam)) +
+        "); automation disabled to prevent stuck keys.");
+    return 0;
+
   case WM_CLOSE:
     // Hidden message window closing — just destroy, do NOT post quit.
     // The GUI window owns the WM_QUIT lifecycle.

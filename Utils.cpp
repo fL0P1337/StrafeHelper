@@ -1,6 +1,7 @@
 // Utils.cpp
 #include "Utils.h"
 #include "Config.h"
+#include "Logger.h"
 #include <array>
 #include <iostream>
 #include <random>
@@ -117,6 +118,8 @@ void LogError(const std::string& message, DWORD errorCode) {
         LocalFree(messageBuffer);
     }
     std::cerr << std::endl;
+    Logger::GetInstance().Log("ERROR: " + message + " (Win32 error " +
+                              std::to_string(errorCode) + ")");
 
 #ifndef _DEBUG
     // Optional: Show message box in Release builds

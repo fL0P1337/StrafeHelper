@@ -59,6 +59,4 @@ public:
   /* Human-readable backend name (for logs/UI). */
   [[nodiscard]] virtual const char *Name() const noexcept = 0;
 
-  /* Whether backend can suppress physical keys by withholding pass-through. */
-  [[nodiscard]] virtual bool CanSuppressPhysical() const noexcept = 0;
 };

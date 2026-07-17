@@ -68,10 +68,28 @@ bool GuiManager::Initialize(HWND hwnd) {
   m_fontLogo = io.Fonts->AddFontFromMemoryTTF(
       (void *)catrine_logo, sizeof(catrine_logo), 17.0f, &font_config, ranges);
 
+  if (!m_fontMedium || !m_fontSemiBold || !m_fontLogo) {
+    Logger::GetInstance().Log("Failed to load embedded GUI fonts.");
+    ImGui::DestroyContext();
+    CleanupDeviceD3D();
+    return false;
+  }
+
   ApplyDarkTheme();
 
-  ImGui_ImplWin32_Init(hwnd);
-  ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+  if (!ImGui_ImplWin32_Init(hwnd)) {
+    Logger::GetInstance().Log("Failed to initialize ImGui Win32 backend.");
+    ImGui::DestroyContext();
+    CleanupDeviceD3D();
+    return false;
+  }
+  if (!ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext)) {
+    Logger::GetInstance().Log("Failed to initialize ImGui DX11 backend.");
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+    CleanupDeviceD3D();
+    return false;
+  }
 
   Logger::GetInstance().Log("GuiManager initialized successfully.");
   return true;
@@ -228,6 +246,57 @@ void GuiManager::RenderConfigContent() {
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 4));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
 
+  if (!Config::LastSaveSucceeded()) {
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.25f, 1.0f),
+                       "Settings could not be saved.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Retry Save")) {
+      (void)Config::SaveConfig();
+    }
+    ImGui::Separator();
+  }
+
+  const auto bindResult = KeybindManager::GetLastBindResult();
+  if (bindResult != KeybindManager::BindResult::None) {
+    const char *message = nullptr;
+    switch (bindResult) {
+    case KeybindManager::BindResult::Success:
+      message = "Key binding updated.";
+      break;
+    case KeybindManager::BindResult::Duplicate:
+      message = "Key already belongs to another feature.";
+      break;
+    case KeybindManager::BindResult::Unsupported:
+      message = "That key cannot be used as a binding.";
+      break;
+    case KeybindManager::BindResult::Cancelled:
+      message = "Key binding cancelled.";
+      break;
+    default:
+      break;
+    }
+    if (message) {
+      ImGui::TextDisabled("%s", message);
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Dismiss Bind Message")) {
+        KeybindManager::ClearLastBindResult();
+      }
+      ImGui::Separator();
+    }
+  }
+
+  const DWORD injectionError = GetLastInjectionError();
+  if (injectionError != ERROR_SUCCESS) {
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.25f, 1.0f),
+                       "Automation disabled: input injection failed (%lu).",
+                       injectionError);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Dismiss")) {
+      ClearInjectionError();
+    }
+    ImGui::Separator();
+  }
+
   // Macro that renders a slider in the reference style:
   //   Label ................ value
   //   [========== bar ==========]
@@ -299,6 +368,7 @@ void GuiManager::RenderConfigContent() {
         VkToName(current, keyName, sizeof(keyName));
       }
       if (ImGui::Button(keyName, ImVec2(0, 0))) {
+        KeybindManager::ClearLastBindResult();
         Globals::g_bindingTarget.store(&target);
       }
       ImGui::SameLine();

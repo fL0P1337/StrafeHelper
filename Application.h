@@ -17,5 +17,7 @@ bool SwitchBackend(Config::InputBackendKind kind);
 
 bool DispatchKeyEvent(const NEO_KEY_EVENT &evt) noexcept;
 bool GetActiveBackendStatus(BackendStatus &out) noexcept;
+DWORD GetLastInjectionError() noexcept;
+void ClearInjectionError() noexcept;
 bool InjectKey(int vk, bool keyDown) noexcept;
 bool InjectKeys(const int *keys, std::size_t count, bool keyDown) noexcept;

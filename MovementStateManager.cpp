@@ -344,7 +344,6 @@ void ReconcileMovementStateAfterBackendSwitch() {
     Globals::g_KeyInfo[vk].physicalKeyDown.store(isDown,
                                                   std::memory_order_release);
     Globals::g_KeyInfo[vk].spamming.store(false, std::memory_order_relaxed);
-    Globals::g_KeyInfo[vk].lastEdgeNs.store(0, std::memory_order_relaxed);
   }
 
   for (int key : {'W', 'A', 'S', 'D'}) {

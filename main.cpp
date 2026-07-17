@@ -104,7 +104,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
       sizeof(WNDCLASSEXW),     CS_CLASSDC, MainWndProc, 0L,   0L,
       GetModuleHandle(NULL),   NULL,       NULL,        NULL, NULL,
       L"StrafeHelperGUIClass", NULL};
-  ::RegisterClassExW(&wc);
+  if (!::RegisterClassExW(&wc)) {
+    MessageBoxA(nullptr, "Failed to register GUI window class.",
+                "Initialization Error", MB_OK | MB_ICONERROR);
+    return 1;
+  }
 
   std::wstring windowTitle =
       std::wstring(Config::APP_NAME,
@@ -117,13 +121,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
   // InitializeApplication() → CreateAppWindow(). Using Globals::g_hWindow
   // here would cause it to be overwritten and the GUI would become invisible.
   HWND hGuiWnd = ::CreateWindowW(wc.lpszClassName, windowTitle.c_str(),
-                           WS_POPUP | WS_THICKFRAME, 100, 100, 420, 380, NULL,
-                           NULL, wc.hInstance, NULL);
+                                WS_POPUP | WS_THICKFRAME, 100, 100, 420, 380,
+                                NULL, NULL, wc.hInstance, NULL);
+  if (!hGuiWnd) {
+    MessageBoxA(nullptr, "Failed to create GUI window.",
+                "Initialization Error", MB_OK | MB_ICONERROR);
+    ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
+    return 1;
+  }
 
   EnableBorderlessResize(hGuiWnd);
 
   // Initialize Direct3D and ImGui
   if (!Gui::GuiManager::GetInstance().Initialize(hGuiWnd)) {
+    MessageBoxA(nullptr, "Failed to initialize Direct3D/ImGui.",
+                "Initialization Error", MB_OK | MB_ICONERROR);
     ::DestroyWindow(hGuiWnd);
     ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
     return 1;

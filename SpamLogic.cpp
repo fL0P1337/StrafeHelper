@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <mutex>
 #include <thread>
+#include <system_error>
 #include <timeapi.h>
 #include <windows.h>
 #include <atomic>
@@ -68,7 +69,9 @@ void SpamThreadFunc(std::stop_token stopToken) {
     }
 
     if (keysToReleaseCount != 0) {
-      SendKeyInputBatch(keysToRelease, keysToReleaseCount, false);
+      if (!SendKeyInputBatch(keysToRelease, keysToReleaseCount, false)) {
+        return;
+      }
     }
 
     virtuallyDownCount = 0;
@@ -132,7 +135,10 @@ void SpamThreadFunc(std::stop_token stopToken) {
       continue;
     }
 
-    SendKeyInputBatch(localActiveKeys, localActiveCount, true);
+    if (!SendKeyInputBatch(localActiveKeys, localActiveCount, true)) {
+      (void)SendKeyInputBatch(localActiveKeys, localActiveCount, false);
+      continue;
+    }
     for (size_t i = 0; i < localActiveCount; ++i) {
       virtuallyDownKeys[i] = localActiveKeys[i];
     }
@@ -169,8 +175,8 @@ void SpamThreadFunc(std::stop_token stopToken) {
 }
 } // namespace
 
-void SendKeyInputBatch(const int *keys, size_t count, bool keyDown) {
-  (void)InjectKeys(keys, count, keyDown);
+bool SendKeyInputBatch(const int *keys, size_t count, bool keyDown) {
+  return InjectKeys(keys, count, keyDown);
 }
 
 void CleanupSpamState(bool restoreHeldKeys) {
@@ -229,13 +235,13 @@ void CleanupSpamState(bool restoreHeldKeys) {
     }
   }
 
-  if (keysToReleaseCount != 0) {
-    SendKeyInputBatch(keysToRelease, keysToReleaseCount, false);
+  if (keysToReleaseCount != 0 &&
+      SendKeyInputBatch(keysToRelease, keysToReleaseCount, false)) {
     Logger::GetInstance().Log("  Sent final UP for spammed keys.");
   }
 
-  if (restoreHeldKeys && keysToRestoreDownCount != 0) {
-    SendKeyInputBatch(keysToRestoreDown, keysToRestoreDownCount, true);
+  if (restoreHeldKeys && keysToRestoreDownCount != 0 &&
+      SendKeyInputBatch(keysToRestoreDown, keysToRestoreDownCount, true)) {
     std::string msg = "  Restored DOWN state for physically held keys:";
     for (size_t i = 0; i < keysToRestoreDownCount; ++i) {
       msg += ' ';
@@ -249,7 +255,13 @@ void CleanupSpamState(bool restoreHeldKeys) {
 
 bool StartSpamThread() {
   StopSpamThread();
-  g_spamThread = std::jthread(SpamThreadFunc);
+  try {
+    g_spamThread = std::jthread(SpamThreadFunc);
+  } catch (const std::system_error &e) {
+    Logger::GetInstance().Log(std::string("Failed to start Spam thread: ") +
+                              e.what());
+    return false;
+  }
   Logger::GetInstance().Log("Spam thread started.");
   return true;
 }

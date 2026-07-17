@@ -8,6 +8,13 @@
 
 namespace KeybindManager {
 
+enum class BindResult : int {
+  None = 0,
+  Success,
+  Duplicate,
+  Unsupported,
+  Cancelled,
+};
 // Result of processing a key event
 struct KeyAction {
   bool shouldActivate = false;   // Feature should become active
@@ -45,6 +52,10 @@ bool IsSpamTriggerActive();
 bool IsTurboLootActive();
 bool IsTurboJumpActive();
 bool IsSuperglideActive();
+
+// Last binding-capture result for GUI feedback.
+BindResult GetLastBindResult() noexcept;
+void ClearLastBindResult() noexcept;
 
 // Handle dynamic keybinding (returns true if event was consumed/suppressed)
 bool HandleBind(int vkCode, bool isKeyDown);
